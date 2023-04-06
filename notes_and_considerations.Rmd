@@ -1,0 +1,48 @@
+---
+title: "Notes"
+author: "Daniel J. Naumenko"
+date: '2022-10-06'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I will keep running notes and considerations here.
+
+### Comparison of 8-OHdG, TAC, and other biomarkers with other studies using the same types of kits.
+
+This question was motivated by a need to understand whether some outliers are reasonable or if they far exceed values found in other studies. 
+
+To promote comparison, I may need to include creatinine/corrected values as a lot of studies seem to use creatinine, especially early 2000s papers. 
+
+#### References using the same kits (preferably measuring in urine)
+
+All of these can be found under the Oxidative Stress folder of Zotero.
+
+1. Rall et al. 2000
+2. Nuernberg et al. 2008
+3. Breton et al. 2007
+4. Kim et al. 2004
+5. Hsieh et al. unknown
+6. Haegele et al. 2000
+7. Schmidt et al. 2002
+8. Rodriguez and Tarnopolsky 2003
+9. Ren et al. unknown
+10. Kresty et al. 2009
+11. Lee et al. 2014
+12. Hakim et al. 2003
+13. Allen et al. 2009
+14. Kim et al. 2009
+15. Mukhopadhyay et al. 2012
+16. Thomson et al. 2008
+
+
+oxidative stress and glucose (chem strips) and ketones?
+
+#### References for OS and Lean Body Mass
+
+1. Marcia dos Santos et al. 2022
+2. Liu et al. 2020
+3. Lian et al. 2022

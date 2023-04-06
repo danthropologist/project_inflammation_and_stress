@@ -1,0 +1,416 @@
+---
+title: 'Report: GAMMs of Biomarkers'
+author: "Daniel J. Naumenko"
+date: "2022-10-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Following the EDA report, I will do some straightforward GAMMs of each biomarker against the others. 
+
+
+```{r libraries and functions}
+
+
+libary(tidyverse)
+library(mgcv)
+
+
+
+outlier_high <- function(x) {
+  x_mean <- mean(x, na.rm = TRUE)
+  x_sd <- sd(x, na.rm = TRUE)
+  x_mean + (3 * x_sd)
+}
+
+outlier_low <- function(x) {
+  x_mean <- mean(x, na.rm = TRUE)
+  x_sd <- sd(x, na.rm = TRUE)
+  x_mean - (3 * x_sd)
+}
+
+give.n <- function(x){
+  return(c(y = median(x)*1.05, label = length(x))) 
+  # experiment with the multiplier to find the perfect position
+}
+
+
+```
+
+
+
+```{r read in data}
+
+urine_data_raw <- read_csv("./tuanan_os_immune_cortisol_20220914.csv",
+                           na = c("NaN", "RANGE", "N/A", "3.58\n3.08\n2.9\n1.84", "", "00", "range",
+                                  "10.88%\t\t\t\n\t\t\t\n0%", "1.7%\t\t\t\n\t\t\t\n6.22%", "9.93%\t\t\t\n\t\t\t\n10.25%",
+                                  "10.88	0%", "10.88%\t\t\t\r\n\t\t\t\r\n0%", "1.7%\t\t\t\r\n\t\t\t\r\n6.22%",
+                                  "9.93%\t\t\t\r\n\t\t\t\r\n10.25%", "3.58\r\n3.08\r\n2.9\r\n1.84"))
+
+
+
+# calculate estimated lean body mass
+
+creat_elbm_data <- read_csv("C:/Users/dnaum/Downloads/SG_Cr_Master_Data_for_Daniel.csv",
+                          na = c("#NULL!"))
+
+creat_clean <- creat_elbm_data %>% 
+  mutate(sample_number = SampleNumber,
+         creatinine = Creatinine_Result,
+         creatinine_cv = CV,
+         fai = Habitat_Wide,
+         sg1 = SG1,
+         crsg1 = CrSG1,
+         sg12 = Sg12,
+         residual = RES_1) %>% 
+  dplyr::select(sample_number, creatinine, creatinine_cv, fai, sg1, crsg1, sg12, residual)
+
+
+# calculate elbm residuals
+# caitlin was unsure if her SPSS calculations were perfect
+mod_elbm <- lm(creatinine ~ 0 + sg1 + sg12, data = creat_clean)
+
+
+creat_clean <- modelr::add_residuals(creat_clean, lm(creatinine ~ 0 + sg1 + sg12, data = creat_clean), var = "resid")
+
+
+# forest strip data
+
+forest_strip <- read_csv("./tblSample_forest_strip.csv",
+                         na = c("N/A", "n/a", "31-Mar-19", ""))
+colnames(forest_strip)[1] <- "sample_number"
+
+
+
+urine_df <- urine_data_raw %>% 
+  # rename features
+  mutate(sample_number = `Sample Number`,
+         follow_number = `Follow Number`,
+         date = as.Date(Date_Collected, format = "%d-%b-%y"),
+         specific_gravity = `CAMP/LAB_specgravitymeter`,
+         month_collection = `Month Collection`,
+         year_collection = `Year Collection`,
+         ohdg = `8OHdG_Result`,
+         ohdg_cv = `tblAnalysis_8-OHdG.CV`,
+         ohdg_status = `tblAnalysis_8-OHdG.Status`,
+         tac = TAC_Result,
+         tac_cv = tblAnalysis_TAC.CV,
+         tac_status = tblAnalysis_TAC.Status,
+         neopterin = Neopterin_Result,
+         neopterin_cv = tblAnalysis_Neopterin.CV,
+         neopterin_status = tblAnalysis_Neopterin.Status,
+         cortisol = Cortisol_Result,
+         cortisol_cv = tblAnalysis_Cortisol.CV,
+         cortisol_status = tblAnalysis_Cortisol.Status,
+         gcsf = `G-CSF_Result`,
+         gcsf_cv = `tblAnalysis_G-CSF.CV`,
+         gcsf_status = `tblAnalysis_G-CSF.Status`,
+         il10 = `IL-10_Result`,
+         il10_cv = `tblAnalysis_IL-10.CV`,
+         il10_status = `tblAnalysis_IL-10.Status`,
+         il1ra = `IL-1RA_Result`,
+         il1ra_cv = `tblAnalysis_IL-1RA.CV`,
+         il1ra_status = `tblAnalysis_IL-1RA.Status`,
+         il8 = `IL-8_Result`,
+         il8_cv = `tblAnalysis_IL-8.CV`,
+         il8_status = `tblAnalysis_IL-8.Status`,
+         mcp1 = `MLP-1_Result`,
+         mcp1_cv = `tblAnalysis_MCP-1.CV`,
+         mcp1_status = `tblAnalysis_MCP-1.Status`,
+         tnfa = TNF_alpha_Result,
+         tnfa_cv = `tblAnalysis_TNF-alpha.CV`,
+         tnf_status = `tblAnalysis_TNF-alpha.Status`) %>% 
+  dplyr::select(-c(`Sample Number`, `Follow Number`, `Month Collection`, `Year Collection`,
+            `CAMP/LAB_specgravitymeter`, `8OHdG_Result`:`tblAnalysis_TNF-alpha.Status`, Date_Collected)) %>% 
+  # remove percent signs from some CVs so they can be analyzed numerically
+  mutate(gcsf_cv = as.numeric(gsub("%", "", gcsf_cv)),
+         il10_cv = as.numeric(gsub("%", "", il10_cv)),
+         il1ra_cv = as.numeric(gsub("%", "", il1ra_cv)),
+         il8_cv = as.numeric(gsub("%", "", il8_cv)),
+         mcp1_cv = as.numeric(gsub("%", "", mcp1_cv)),
+         tnfa_cv = as.numeric(gsub("%", "", tnfa_cv))) %>% 
+  # correct urine values for specific gravity
+  mutate(ohdg_sg  = (ohdg * ((1.024 - 1)/(specific_gravity - 1))),
+         tac_sg = (tac * ((1.024 - 1)/(specific_gravity - 1))),
+         neopterin_sg = (neopterin * ((1.024 - 1)/(specific_gravity - 1))),
+         cortisol_sg = (cortisol * ((1.024 - 1)/(specific_gravity - 1))),
+         gcsf_sg = (gcsf * ((1.024 - 1)/(specific_gravity - 1))),
+         il10_sg = (il10 * ((1.024 - 1)/(specific_gravity - 1))),
+         il8_sg = (il8 * ((1.024 - 1)/(specific_gravity - 1))),
+         il1ra_sg = (il1ra * ((1.024 - 1)/(specific_gravity - 1))),
+         mcp1_sg = (mcp1 * ((1.024 - 1)/(specific_gravity - 1))),
+         tnfa_sg = (tnfa * ((1.024 - 1)/(specific_gravity - 1)))) %>% 
+  # recode field worker names
+  mutate(Who_collected_clean = case_when(
+    Who_Collected == "Pak Rahmad" ~ "Rahmadt",
+    Who_Collected == "tono" ~ "Tono",
+    Who_Collected == "Rahmatd" ~ "Rahmadt",
+    Who_Collected == "Bec" ~ "Rebecca",
+    Who_Collected == "Becca" ~ "Rebecca",
+    Who_Collected == "Wendy Erb" ~ "Wendy",
+    Who_Collected == "Yulia" ~ "Julia",
+    Who_Collected == "Nanon" ~ "Manon",
+    Who_Collected == "Ramahtd" ~ "Rahmadt",
+    Who_Collected == "Rahmat" ~ "Rahmadt", 
+    Who_Collected == "Ramahtd" ~"Rahmadt",
+    Who_Collected == "Pak Rahmatd" ~ "Rahmadt", 
+    Who_Collected == "idun" ~ "Idun", 
+    Who_Collected == "ern" ~ "Erin",
+    Who_Collected == "Ern" ~ "Erin",
+    Who_Collected == "alysse" ~ "Alysse", 
+    Who_Collected == "Tonno" ~ "Tono",
+    Who_Collected == "Beth Barrow" ~ "Beth",
+    Who_Collected == "2014" ~ "Unknown",
+    Who_Collected == "Liz Ballare" ~ "Liz",
+    Who_Collected == "Rahmatal" ~ "Rahmadt",
+    Who_Collected == "Mawas" ~ "Unknown",
+    Who_Collected == "Sony" ~ "Unknown",
+    Who_Collected == "Otto" ~ "Unknown",
+    Who_Collected == "Kerry" ~ "Unknown",
+    Who_Collected == "Niko" ~ "Unknown",
+    Who_Collected == "Sofi" ~ "Sophia",
+    Who_Collected == "Alie" ~ "Allie",
+    Who_Collected == "Rebecca Brittain" ~ "Rebecca",
+    TRUE ~ as.character(Who_Collected))) %>% 
+  mutate(Age_Class = case_when(
+    Age_Class == "adult flanged male" ~ "AFM",
+    Age_Class == "adult female with dependent" ~ "AFwD",
+    Age_Class == "adult unflanged male" ~ "UFM",
+    Age_Class == "adult female no dependent" ~ "AFnD",
+    Age_Class == "independent immature (older juvs)" ~ "II",
+    Age_Class == "dependent immature - clinging infant (0-4yrs)" ~ "DIC",
+    Age_Class == "dependent immature non-clinging infant (4yrs-weaned)" ~ "DINC",
+    Age_Class == "semi-independent immature (juveniles)" ~ "SII",
+    TRUE ~ as.character(Age_Class))) %>% 
+  # relevel age-sex classes
+  mutate(Age_Cat = factor(Age_Class, levels = c("DIC", "DINC", "SII", "II", "UFM", "AFM", "AFnD", "AFwD"))) %>% 
+  # left join in elbm data from caitlin
+  # double check i used the correct file and data
+  left_join(., creat_clean, by = "sample_number") %>% 
+  # defining what we want to be NA
+  mutate(ohdg_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | ohdg_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ ohdg_sg),
+         tac_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | tac_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ tac_sg),
+         neop_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | neopterin_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ neopterin_sg),
+         cort_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | cortisol_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ cortisol_sg),
+         gcsf_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | gcsf_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ gcsf_sg),
+         il10_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | il10_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ il10_sg),
+         il1ra_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | il1ra_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ il1ra_sg),
+         il8_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | il8_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ il8_sg),
+         mcp1_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | mcp1_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ mcp1_sg),
+         tnfa_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | tnfa_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ tnfa_sg),
+         elbm_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | creatinine_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ residual)) %>% 
+  # flagging outliers
+  mutate(ohdg_out_z = ifelse(ohdg_include > outlier_high(ohdg_include) | ohdg_include < outlier_low(ohdg_include), "Z-outlier", "not_outlier"),
+         tac_out_z = ifelse(tac_include > outlier_high(tac_include) | tac_include < outlier_low(tac_include), "Z-outlier", "not_outlier"),
+         neop_out_z = ifelse(neop_include > outlier_high(neop_include) | neop_include < outlier_low(neop_include), "Z-outlier", "not_outlier"),
+         cort_out_z = ifelse(cort_include > outlier_high(cort_include) | cort_include < outlier_low(cort_include), "Z-outlier", "not_outlier"),
+         elbm_out_z = ifelse(elbm_include > outlier_high(elbm_include) | elbm_include < outlier_low(elbm_include), "Z-outlier", "nout_outlier")) %>% 
+  arrange(ohdg_include) %>% 
+  mutate(ohdg_dist = round(ohdg_include - lag(ohdg_include, n = 1), digits = 2)) %>% 
+  arrange(tac_include) %>% 
+  mutate(tac_dist = round(tac_include - lag(tac_include, n = 1), digits = 2)) %>% 
+  arrange(neop_include) %>% 
+  mutate(neop_dist = round(neop_include - lag(neop_include, n = 1), digits = 2)) %>% 
+  arrange(cort_include) %>% 
+  mutate(cort_dist = round(cort_include - lag(cort_include, n = 1), digits = 2)) %>% 
+  left_join(., forest_strip, by = c("sample_number")) %>% 
+  # relevel chemstrip data
+  mutate(forest_glucose = fct_relevel(FOREST_glucose, "negative", "normal", "50", "100", "250", "500", "1000"),
+         forest_erythrocytes = fct_relevel(FOREST_erythrocytes, "negative", "trace", "about 50", "about 250"),
+         forest_bilirubin = fct_relevel(FOREST_bilirubin, "negative", "trace+", "moderate++", "large+++"),
+         forest_urobilinogen = fct_relevel(FOREST_urobilinogen, "negative", "normal", "1", "4", "8", "12"),
+         # need to group small and negative together
+         forest_ketone_djn = ifelse(FOREST_ketones %in% c("negative", "small+"), "negative-small", FOREST_ketones),
+         forest_ketones = fct_relevel(forest_ketone_djn, "negative-small", "moderate++", "large+++"),
+         forest_protein = fct_relevel(FOREST_protein, "negative", "trace", "30+", "100++", "500+++"),
+         forest_nitrite = fct_relevel(FOREST_ntrite, "negative", "positive"),
+         forest_leukocytes = fct_relevel(FOREST_leukocytes, "negative", "trace", "trace+", "mod++"),
+         Age_Class = fct_relevel(Age_Class, "DIC", "DINC", "SII", "II", "AFnD", "AFwD", "UFM", "AFM")) %>% 
+  dplyr::select(-c(FOREST_Chemtrip_Comburtest:FOREST_erythrocytes, forest_ketone_djn)) %>% 
+  mutate(elbm = resid)
+  
+ 
+
+
+rm(creat_clean)
+rm(creat_elbm_data)
+rm(urine_data_raw)
+rm(forest_strip)
+
+```
+
+
+The initial set of models will have a random intercept for orangutan ID. In the EDA report, there did not appear to be any significant differences by age-sex class.
+
+https://cran.r-project.org/web/packages/gratia/vignettes/gratia.html
+
+&nbsp;
+
+### 8-OHdG ~ TAC
+
+
+```{r ohdg and tac all data}
+
+
+mod_ohdg_tac <- gamm(ohdg_include ~ s(tac_include), data = urine_df, random = list(Orangutan_ID=~1))
+summary(mod_ohdg_tac$gam)
+draw(mod_ohdg_tac$gam)
+
+appraise(mod_ohdg_tac$gam)
+
+
+
+
+```
+
+Definitely need to adjust and refit this model, probably by adjusting the family. Look at what you did for AABA 2022 to determine what link family to use.
+
+```{r ohdg and tac distance outliers removed}
+
+  
+mod_ohdg_tac_outlier <- gamm(ohdg_include ~ s(tac_include), 
+                             data = urine_df %>% filter(ohdg_dist < 10 & tac_dist < 1.5), 
+                             random = list(Orangutan_ID=~1))
+
+summary(mod_ohdg_tac_outlier$gam)
+draw(mod_ohdg_tac_outlier$gam)
+appraise(mod_ohdg_tac_outlier$gam)
+
+```
+
+Still need to adjust the distribution of stuff. Will want to run with link functions with and without distances removed.
+
+&nbsp;
+
+#### 8-OHdG and Neopterin
+
+
+```{r ohdg and neopterin all data}
+
+mod_ohdg_neop <- gamm(ohdg_include ~ s(neop_include), data = urine_df, random = list(Orangutan_ID=~1))
+
+summary(mod_ohdg_neop$gam)
+draw(mod_ohdg_neop$gam)
+
+appraise(mod_ohdg_neop$gam)
+
+```
+
+So there is an intense outlier, potentially two, that should definitely be removed. I will also want to adjust the link family.
+
+
+```{r ohdg and neopterin distance outliers removed}
+
+
+mod_ohdg_neop_outlier <- gamm(ohdg_include ~ s(neop_include), 
+                             data = urine_df %>% filter(ohdg_dist < 10 & neop_include < 3000), 
+                             random = list(Orangutan_ID=~1))
+
+summary(mod_ohdg_neop_outlier$gam)
+draw(mod_ohdg_neop_outlier$gam)
+appraise(mod_ohdg_neop_outlier$gam)
+
+
+```
+
+Still some outliers and distribution stuff that needs to be worked out. However, we see an increase between the two, and then we see them tank. I wonder why this odd relationship exists. Perhaps high neopterin/8-OHdG stimulates higher TAC, resulting in lower 8-OHdG. or the longer one is exposed...need to explore this but not sure how.
+
+
+&nbsp;
+
+```{r tac and neopterin all data}
+
+mod_tac_neop <- gamm(tac_include ~ s(neop_include), data = urine_df, random = list(Orangutan_ID=~1))
+
+summary(mod_tac_neop$gam)
+
+draw(mod_tac_neop$gam)
+
+```
+
+Ok, so it appears there is a linear relationship between these two variables, so I will run a glmm.
+
+```{r tac and neopterin all data glmm}
+
+mod_tac_neop_linear <- lmer(tac_include ~ neop_include + (1|Orangutan_ID), data = urine_df)
+
+summary(mod_tac_neop_linear)
+plot(mod_tac_neop_linear)
+
+
+mod_tac_neop_linear_brms <- brm(tac_include ~ neop_include + (1|Orangutan_ID),
+                                data = urine_df)
+
+# https://stats.stackexchange.com/questions/398869/r-how-to-fit-a-glmm-in-nlme
+
+```
+
+
+&nbsp;
+
+#### 8-OHdG and Cortisol
+
+```{r ohdg and cortisol all data}
+
+mod_ohdg_cort <- gamm(ohdg_include ~ s(cort_include), data = urine_df, random = list(Orangutan_ID=~1))
+
+summary(mod_ohdg_cort$gam)
+draw(mod_ohdg_cort$gam)
+appraise(mod_ohdg_cort$gam)
+
+
+
+```
+
+
+A few outliers to pay attention to removing.
+
+
+```{r ohdg and cortisol distance outliers removed}
+
+
+
+```
+
+
+
+&nbsp;
+
+#### 8-OHdG and ELBM
+
+```{r}
+
+mod_ohdg_elbm <- gamm(ohdg_include ~ s(elbm), data = urine_df, random = list(Orangutan_ID=~1))
+
+summary(mod_ohdg_elbm$gam)
+
+draw(mod_ohdg_elbm$gam)
+appraise(mod_ohdg_elbm$gam)
+
+```
+
+
+There is a single residual I definitely should remove as it is almost an entire order of magnitude higher than others
+
+
+```{r ohdg and elbm distance outliers removed}
+
+
+
+```
+

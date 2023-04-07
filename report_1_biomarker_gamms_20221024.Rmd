@@ -6,7 +6,11 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
 ```
 
 
@@ -16,8 +20,10 @@ Following the EDA report, I will do some straightforward GAMMs of each biomarker
 ```{r libraries and functions}
 
 
-libary(tidyverse)
+library(tidyverse)
 library(mgcv)
+library(gratia)
+library(lme4)
 
 
 
@@ -46,16 +52,20 @@ give.n <- function(x){
 ```{r read in data}
 
 urine_data_raw <- read_csv("./tuanan_os_immune_cortisol_20220914.csv",
-                           na = c("NaN", "RANGE", "N/A", "3.58\n3.08\n2.9\n1.84", "", "00", "range",
-                                  "10.88%\t\t\t\n\t\t\t\n0%", "1.7%\t\t\t\n\t\t\t\n6.22%", "9.93%\t\t\t\n\t\t\t\n10.25%",
-                                  "10.88	0%", "10.88%\t\t\t\r\n\t\t\t\r\n0%", "1.7%\t\t\t\r\n\t\t\t\r\n6.22%",
-                                  "9.93%\t\t\t\r\n\t\t\t\r\n10.25%", "3.58\r\n3.08\r\n2.9\r\n1.84"))
+                           na = c("NaN", "RANGE", "N/A", "3.58\n3.08\n2.9\n1.84", 
+                                  "", "00", "range", "10.88%\t\t\t\n\t\t\t\n0%",
+                                  "1.7%\t\t\t\n\t\t\t\n6.22%", 
+                                  "9.93%\t\t\t\n\t\t\t\n10.25%", "10.88	0%", 
+                                  "10.88%\t\t\t\r\n\t\t\t\r\n0%", 
+                                  "1.7%\t\t\t\r\n\t\t\t\r\n6.22%",
+                                  "9.93%\t\t\t\r\n\t\t\t\r\n10.25%", 
+                                  "3.58\r\n3.08\r\n2.9\r\n1.84"))
 
 
 
 # calculate estimated lean body mass
 
-creat_elbm_data <- read_csv("C:/Users/dnaum/Downloads/SG_Cr_Master_Data_for_Daniel.csv",
+creat_elbm_data <- read_csv("./SG_Cr_Master_Data_for_Daniel.csv",
                           na = c("#NULL!"))
 
 creat_clean <- creat_elbm_data %>% 
@@ -67,7 +77,8 @@ creat_clean <- creat_elbm_data %>%
          crsg1 = CrSG1,
          sg12 = Sg12,
          residual = RES_1) %>% 
-  dplyr::select(sample_number, creatinine, creatinine_cv, fai, sg1, crsg1, sg12, residual)
+  dplyr::select(sample_number, creatinine, creatinine_cv, fai, sg1, 
+                crsg1, sg12, residual)
 
 
 # calculate elbm residuals
@@ -75,7 +86,10 @@ creat_clean <- creat_elbm_data %>%
 mod_elbm <- lm(creatinine ~ 0 + sg1 + sg12, data = creat_clean)
 
 
-creat_clean <- modelr::add_residuals(creat_clean, lm(creatinine ~ 0 + sg1 + sg12, data = creat_clean), var = "resid")
+creat_clean <- modelr::add_residuals(creat_clean, 
+                                     lm(creatinine ~ 0 + sg1 + sg12, 
+                                        data = creat_clean), 
+                                     var = "resid")
 
 
 # forest strip data
@@ -124,8 +138,11 @@ urine_df <- urine_data_raw %>%
          tnfa = TNF_alpha_Result,
          tnfa_cv = `tblAnalysis_TNF-alpha.CV`,
          tnf_status = `tblAnalysis_TNF-alpha.Status`) %>% 
-  dplyr::select(-c(`Sample Number`, `Follow Number`, `Month Collection`, `Year Collection`,
-            `CAMP/LAB_specgravitymeter`, `8OHdG_Result`:`tblAnalysis_TNF-alpha.Status`, Date_Collected)) %>% 
+  dplyr::select(-c(`Sample Number`, `Follow Number`, 
+                   `Month Collection`, `Year Collection`,
+                   `CAMP/LAB_specgravitymeter`, 
+                   `8OHdG_Result`:`tblAnalysis_TNF-alpha.Status`, 
+                   Date_Collected)) %>% 
   # remove percent signs from some CVs so they can be analyzed numerically
   mutate(gcsf_cv = as.numeric(gsub("%", "", gcsf_cv)),
          il10_cv = as.numeric(gsub("%", "", il10_cv)),
@@ -187,7 +204,24 @@ urine_df <- urine_data_raw %>%
     Age_Class == "semi-independent immature (juveniles)" ~ "SII",
     TRUE ~ as.character(Age_Class))) %>% 
   # relevel age-sex classes
-  mutate(Age_Cat = factor(Age_Class, levels = c("DIC", "DINC", "SII", "II", "UFM", "AFM", "AFnD", "AFwD"))) %>% 
+  mutate(Age_Cat = factor(Age_Class, levels = c("DIC", "DINC", "SII", "II", 
+                                                "UFM", "AFM", "AFnD", "AFwD"))) %>% 
+  # truncate the age-categories into simpler and more useful
+  mutate(Age_Cat_trunc = case_when(
+    Age_Cat == "DIC" ~ "Juvenile",
+    Age_Cat == "DINC" ~ "Juvenile",
+    Age_Cat == "SII" ~ "Juvenile",
+    Age_Cat == "II" ~ "Juvenile",
+    Age_Cat == "AFwD" ~ "Adult Female",
+    Age_Cat == "AFnD" ~ "Adult Female",
+    Age_Cat == "AFM" ~ "Flanged Male",
+    Age_Cat == "UFM" ~ "Unflanged Male",
+    TRUE ~ as.character(Age_Cat))) %>% 
+  # relevel truncated age sex classes
+  mutate(Age_Cat_trunc = factor(Age_Cat_trunc, levels = c("Juvenile", 
+                                                          "Adult Female", 
+                                                          "Unflanged Male", 
+                                                          "Flanged Male"))) %>% 
   # left join in elbm data from caitlin
   # double check i used the correct file and data
   left_join(., creat_clean, by = "sample_number") %>% 
@@ -216,10 +250,10 @@ urine_df <- urine_data_raw %>%
                                   TRUE ~ residual)) %>% 
   # flagging outliers
   mutate(ohdg_out_z = ifelse(ohdg_include > outlier_high(ohdg_include) | ohdg_include < outlier_low(ohdg_include), "Z-outlier", "not_outlier"),
-         tac_out_z = ifelse(tac_include > outlier_high(tac_include) | tac_include < outlier_low(tac_include), "Z-outlier", "not_outlier"),
+         tac_out_z =  ifelse(tac_include > outlier_high(tac_include) | tac_include < outlier_low(tac_include), "Z-outlier", "not_outlier"),
          neop_out_z = ifelse(neop_include > outlier_high(neop_include) | neop_include < outlier_low(neop_include), "Z-outlier", "not_outlier"),
          cort_out_z = ifelse(cort_include > outlier_high(cort_include) | cort_include < outlier_low(cort_include), "Z-outlier", "not_outlier"),
-         elbm_out_z = ifelse(elbm_include > outlier_high(elbm_include) | elbm_include < outlier_low(elbm_include), "Z-outlier", "nout_outlier")) %>% 
+         elbm_out_z = ifelse(elbm_include > outlier_high(elbm_include) | elbm_include < outlier_low(elbm_include), "Z-outlier", "not_outlier")) %>% 
   arrange(ohdg_include) %>% 
   mutate(ohdg_dist = round(ohdg_include - lag(ohdg_include, n = 1), digits = 2)) %>% 
   arrange(tac_include) %>% 
@@ -230,17 +264,26 @@ urine_df <- urine_data_raw %>%
   mutate(cort_dist = round(cort_include - lag(cort_include, n = 1), digits = 2)) %>% 
   left_join(., forest_strip, by = c("sample_number")) %>% 
   # relevel chemstrip data
-  mutate(forest_glucose = fct_relevel(FOREST_glucose, "negative", "normal", "50", "100", "250", "500", "1000"),
-         forest_erythrocytes = fct_relevel(FOREST_erythrocytes, "negative", "trace", "about 50", "about 250"),
-         forest_bilirubin = fct_relevel(FOREST_bilirubin, "negative", "trace+", "moderate++", "large+++"),
-         forest_urobilinogen = fct_relevel(FOREST_urobilinogen, "negative", "normal", "1", "4", "8", "12"),
+  mutate(forest_glucose = fct_relevel(FOREST_glucose, "negative", "normal", "50", 
+                                      "100", "250", "500", "1000"),
+         forest_erythrocytes = fct_relevel(FOREST_erythrocytes, "negative", "trace", 
+                                           "about 50", "about 250"),
+         forest_bilirubin = fct_relevel(FOREST_bilirubin, "negative", "trace+", 
+                                        "moderate++", "large+++"),
+         forest_urobilinogen = fct_relevel(FOREST_urobilinogen, "negative", 
+                                           "normal", "1", "4", "8", "12"),
          # need to group small and negative together
-         forest_ketone_djn = ifelse(FOREST_ketones %in% c("negative", "small+"), "negative-small", FOREST_ketones),
-         forest_ketones = fct_relevel(forest_ketone_djn, "negative-small", "moderate++", "large+++"),
-         forest_protein = fct_relevel(FOREST_protein, "negative", "trace", "30+", "100++", "500+++"),
+         forest_ketone_djn = ifelse(FOREST_ketones %in% c("negative", "small+"), 
+                                    "negative-small", FOREST_ketones),
+         forest_ketones = fct_relevel(forest_ketone_djn, "negative-small",
+                                      "moderate++", "large+++"),
+         forest_protein = fct_relevel(FOREST_protein, "negative", "trace",
+                                      "30+", "100++", "500+++"),
          forest_nitrite = fct_relevel(FOREST_ntrite, "negative", "positive"),
-         forest_leukocytes = fct_relevel(FOREST_leukocytes, "negative", "trace", "trace+", "mod++"),
-         Age_Class = fct_relevel(Age_Class, "DIC", "DINC", "SII", "II", "AFnD", "AFwD", "UFM", "AFM")) %>% 
+         forest_leukocytes = fct_relevel(FOREST_leukocytes, "negative", 
+                                         "trace", "trace+", "mod++"),
+         Age_Class = fct_relevel(Age_Class, "DIC", "DINC", "SII", "II", 
+                                 "AFnD", "AFwD", "UFM", "AFM")) %>% 
   dplyr::select(-c(FOREST_Chemtrip_Comburtest:FOREST_erythrocytes, forest_ketone_djn)) %>% 
   mutate(elbm = resid)
   
@@ -251,6 +294,7 @@ rm(creat_clean)
 rm(creat_elbm_data)
 rm(urine_data_raw)
 rm(forest_strip)
+rm(mod_elbm)
 
 ```
 
@@ -267,33 +311,39 @@ https://cran.r-project.org/web/packages/gratia/vignettes/gratia.html
 ```{r ohdg and tac all data}
 
 
-mod_ohdg_tac <- gamm(ohdg_include ~ s(tac_include), data = urine_df, random = list(Orangutan_ID=~1))
-summary(mod_ohdg_tac$gam)
-draw(mod_ohdg_tac$gam)
+# lnorm link
 
-appraise(mod_ohdg_tac$gam)
+mod_ohdg_tac_lnorm <- gamm(ohdg_include ~ s(tac_include), 
+                     data = urine_df %>% filter(ohdg_out_z == "not_outlier",
+                                                tac_out_z == "not_outlier"), 
+                     family = Gamma,
+                     random = list(Orangutan_ID=~1))
+summary(mod_ohdg_tac_lnorm$gam)
+draw(mod_ohdg_tac_lnorm$gam)
+
+appraise(mod_ohdg_tac_lnorm$gam)
+
+
+# gamma link
+
+mod_ohdg_tac_gamma <- gamm(ohdg_include ~ s(tac_include), 
+                     data = urine_df %>% filter(ohdg_out_z == "not_outlier",
+                                                tac_out_z == "not_outlier"), 
+                     family = Gamma,
+                     random = list(Orangutan_ID=~1))
+summary(mod_ohdg_tac_gamma$gam)
+draw(mod_ohdg_tac_gamma$gam)
+
+appraise(mod_ohdg_tac_gamma$gam)
 
 
 
 
 ```
 
-Definitely need to adjust and refit this model, probably by adjusting the family. Look at what you did for AABA 2022 to determine what link family to use.
+The fit for this model is ok but not great, need adjustment to residuals. When I only removed the 8-OHdG outliers but not tac, the two different link functions resulted in different shapes of effect. But when both are removed, the relationship is negative.
 
-```{r ohdg and tac distance outliers removed}
 
-  
-mod_ohdg_tac_outlier <- gamm(ohdg_include ~ s(tac_include), 
-                             data = urine_df %>% filter(ohdg_dist < 10 & tac_dist < 1.5), 
-                             random = list(Orangutan_ID=~1))
-
-summary(mod_ohdg_tac_outlier$gam)
-draw(mod_ohdg_tac_outlier$gam)
-appraise(mod_ohdg_tac_outlier$gam)
-
-```
-
-Still need to adjust the distribution of stuff. Will want to run with link functions with and without distances removed.
 
 &nbsp;
 
@@ -302,7 +352,11 @@ Still need to adjust the distribution of stuff. Will want to run with link funct
 
 ```{r ohdg and neopterin all data}
 
-mod_ohdg_neop <- gamm(ohdg_include ~ s(neop_include), data = urine_df, random = list(Orangutan_ID=~1))
+mod_ohdg_neop <- gamm(ohdg_include ~ s(neop_include), 
+                      data = urine_df %>% filter(neop_out_z == "not_outlier",
+                                                 ohdg_out_z == "not_outlier"), 
+                      family = Gamma,
+                      random = list(Orangutan_ID=~1))
 
 summary(mod_ohdg_neop$gam)
 draw(mod_ohdg_neop$gam)
@@ -311,22 +365,8 @@ appraise(mod_ohdg_neop$gam)
 
 ```
 
-So there is an intense outlier, potentially two, that should definitely be removed. I will also want to adjust the link family.
+There are some pretty big outliers and these need to be addressed. Gamma has a better fit than lnorm.
 
-
-```{r ohdg and neopterin distance outliers removed}
-
-
-mod_ohdg_neop_outlier <- gamm(ohdg_include ~ s(neop_include), 
-                             data = urine_df %>% filter(ohdg_dist < 10 & neop_include < 3000), 
-                             random = list(Orangutan_ID=~1))
-
-summary(mod_ohdg_neop_outlier$gam)
-draw(mod_ohdg_neop_outlier$gam)
-appraise(mod_ohdg_neop_outlier$gam)
-
-
-```
 
 Still some outliers and distribution stuff that needs to be worked out. However, we see an increase between the two, and then we see them tank. I wonder why this odd relationship exists. Perhaps high neopterin/8-OHdG stimulates higher TAC, resulting in lower 8-OHdG. or the longer one is exposed...need to explore this but not sure how.
 
@@ -335,11 +375,17 @@ Still some outliers and distribution stuff that needs to be worked out. However,
 
 ```{r tac and neopterin all data}
 
-mod_tac_neop <- gamm(tac_include ~ s(neop_include), data = urine_df, random = list(Orangutan_ID=~1))
+mod_tac_neop <- gamm(tac_include ~ s(neop_include), 
+                     data = urine_df %>% filter(tac_out_z == "not_outlier",
+                                                neop_out_z == "not_outlier"), 
+                     family = Gamma,
+                     random = list(Orangutan_ID=~1))
 
 summary(mod_tac_neop$gam)
 
 draw(mod_tac_neop$gam)
+
+appraise(mod_tac_neop$gam)
 
 ```
 
@@ -347,14 +393,14 @@ Ok, so it appears there is a linear relationship between these two variables, so
 
 ```{r tac and neopterin all data glmm}
 
-mod_tac_neop_linear <- lmer(tac_include ~ neop_include + (1|Orangutan_ID), data = urine_df)
+mod_tac_neop_linear <- lmer(tac_include ~ neop_include + (1|Orangutan_ID), 
+                            data = urine_df %>% filter(tac_out_z == "not_outlier",
+                                                neop_out_z == "not_outlier"))
 
 summary(mod_tac_neop_linear)
 plot(mod_tac_neop_linear)
 
 
-mod_tac_neop_linear_brms <- brm(tac_include ~ neop_include + (1|Orangutan_ID),
-                                data = urine_df)
 
 # https://stats.stackexchange.com/questions/398869/r-how-to-fit-a-glmm-in-nlme
 
@@ -367,7 +413,11 @@ mod_tac_neop_linear_brms <- brm(tac_include ~ neop_include + (1|Orangutan_ID),
 
 ```{r ohdg and cortisol all data}
 
-mod_ohdg_cort <- gamm(ohdg_include ~ s(cort_include), data = urine_df, random = list(Orangutan_ID=~1))
+mod_ohdg_cort <- gamm(ohdg_include ~ s(cort_include), 
+                      data = urine_df %>% filter(ohdg_out_z == "not_outlier",
+                                                 cort_out_z == "not_outlier"), 
+                      family = gaussian(link = "log"),
+                      random = list(Orangutan_ID=~1))
 
 summary(mod_ohdg_cort$gam)
 draw(mod_ohdg_cort$gam)
@@ -378,14 +428,7 @@ appraise(mod_ohdg_cort$gam)
 ```
 
 
-A few outliers to pay attention to removing.
-
-
-```{r ohdg and cortisol distance outliers removed}
-
-
-
-```
+A few outliers to pay attention to removing. Possible that a linear model would be better.
 
 
 
@@ -393,9 +436,13 @@ A few outliers to pay attention to removing.
 
 #### 8-OHdG and ELBM
 
-```{r}
+```{r gamm ohdg and elbm}
 
-mod_ohdg_elbm <- gamm(ohdg_include ~ s(elbm), data = urine_df, random = list(Orangutan_ID=~1))
+mod_ohdg_elbm <- gamm(ohdg_include ~ s(elbm), 
+                      data = urine_df %>% filter(ohdg_out_z == "not_outlier",
+                                                 elbm_out_z == "not_outlier"), 
+                      family = gaussian(link = "log"),
+                      random = list(Orangutan_ID=~1))
 
 summary(mod_ohdg_elbm$gam)
 
@@ -405,12 +452,6 @@ appraise(mod_ohdg_elbm$gam)
 ```
 
 
-There is a single residual I definitely should remove as it is almost an entire order of magnitude higher than others
+There are some pretty big residuals
 
-
-```{r ohdg and elbm distance outliers removed}
-
-
-
-```
 

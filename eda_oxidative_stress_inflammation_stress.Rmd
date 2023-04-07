@@ -1,0 +1,2412 @@
+---
+title: 'EDA: Oxidative Stress, Inflammation, and Glucocorticoid Stress'
+author: "Daniel J. Naumenko"
+date: '2022-09-14'
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+```{r libraries and functions}
+
+
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(fitdistrplus)
+library(gridExtra)
+library(moments)
+library(MVN)
+library(data.table)
+library(modelr)
+library(viridis)
+library(mgcv)
+library(lmerTest)
+library(MuMIn)
+library(emmeans)
+
+outlier_high <- function(x) {
+  x_mean <- mean(x, na.rm = TRUE)
+  x_sd <- sd(x, na.rm = TRUE)
+  x_mean + (3 * x_sd)
+}
+
+outlier_low <- function(x) {
+  x_mean <- mean(x, na.rm = TRUE)
+  x_sd <- sd(x, na.rm = TRUE)
+  x_mean - (3 * x_sd)
+}
+
+give.n <- function(x){
+  return(c(y = median(x)*1.05, label = length(x))) 
+  # experiment with the multiplier to find the perfect position
+}
+
+
+```
+
+
+
+```{r read in data}
+
+urine_data_raw <- read_csv("./tuanan_os_immune_cortisol_20220914.csv",
+                           na = c("NaN", "RANGE", "N/A", "3.58\n3.08\n2.9\n1.84", 
+                                  "", "00", "range", "10.88%\t\t\t\n\t\t\t\n0%",
+                                  "1.7%\t\t\t\n\t\t\t\n6.22%", 
+                                  "9.93%\t\t\t\n\t\t\t\n10.25%", "10.88	0%", 
+                                  "10.88%\t\t\t\r\n\t\t\t\r\n0%", 
+                                  "1.7%\t\t\t\r\n\t\t\t\r\n6.22%",
+                                  "9.93%\t\t\t\r\n\t\t\t\r\n10.25%", 
+                                  "3.58\r\n3.08\r\n2.9\r\n1.84"))
+
+
+
+# calculate estimated lean body mass
+
+creat_elbm_data <- read_csv("./SG_Cr_Master_Data_for_Daniel.csv",
+                          na = c("#NULL!"))
+
+creat_clean <- creat_elbm_data %>% 
+  mutate(sample_number = SampleNumber,
+         creatinine = Creatinine_Result,
+         creatinine_cv = CV,
+         fai = Habitat_Wide,
+         sg1 = SG1,
+         crsg1 = CrSG1,
+         sg12 = Sg12,
+         residual = RES_1) %>% 
+  dplyr::select(sample_number, creatinine, creatinine_cv, fai, sg1, 
+                crsg1, sg12, residual)
+
+
+# calculate elbm residuals
+# caitlin was unsure if her SPSS calculations were perfect
+mod_elbm <- lm(creatinine ~ 0 + sg1 + sg12, data = creat_clean)
+
+
+creat_clean <- modelr::add_residuals(creat_clean, 
+                                     lm(creatinine ~ 0 + sg1 + sg12, 
+                                        data = creat_clean), 
+                                     var = "resid")
+
+
+# forest strip data
+
+forest_strip <- read_csv("./tblSample_forest_strip.csv",
+                         na = c("N/A", "n/a", "31-Mar-19", ""))
+colnames(forest_strip)[1] <- "sample_number"
+
+
+
+urine_df <- urine_data_raw %>% 
+  # rename features
+  mutate(sample_number = `Sample Number`,
+         follow_number = `Follow Number`,
+         date = as.Date(Date_Collected, format = "%d-%b-%y"),
+         specific_gravity = `CAMP/LAB_specgravitymeter`,
+         month_collection = `Month Collection`,
+         year_collection = `Year Collection`,
+         ohdg = `8OHdG_Result`,
+         ohdg_cv = `tblAnalysis_8-OHdG.CV`,
+         ohdg_status = `tblAnalysis_8-OHdG.Status`,
+         tac = TAC_Result,
+         tac_cv = tblAnalysis_TAC.CV,
+         tac_status = tblAnalysis_TAC.Status,
+         neopterin = Neopterin_Result,
+         neopterin_cv = tblAnalysis_Neopterin.CV,
+         neopterin_status = tblAnalysis_Neopterin.Status,
+         cortisol = Cortisol_Result,
+         cortisol_cv = tblAnalysis_Cortisol.CV,
+         cortisol_status = tblAnalysis_Cortisol.Status,
+         gcsf = `G-CSF_Result`,
+         gcsf_cv = `tblAnalysis_G-CSF.CV`,
+         gcsf_status = `tblAnalysis_G-CSF.Status`,
+         il10 = `IL-10_Result`,
+         il10_cv = `tblAnalysis_IL-10.CV`,
+         il10_status = `tblAnalysis_IL-10.Status`,
+         il1ra = `IL-1RA_Result`,
+         il1ra_cv = `tblAnalysis_IL-1RA.CV`,
+         il1ra_status = `tblAnalysis_IL-1RA.Status`,
+         il8 = `IL-8_Result`,
+         il8_cv = `tblAnalysis_IL-8.CV`,
+         il8_status = `tblAnalysis_IL-8.Status`,
+         mcp1 = `MLP-1_Result`,
+         mcp1_cv = `tblAnalysis_MCP-1.CV`,
+         mcp1_status = `tblAnalysis_MCP-1.Status`,
+         tnfa = TNF_alpha_Result,
+         tnfa_cv = `tblAnalysis_TNF-alpha.CV`,
+         tnf_status = `tblAnalysis_TNF-alpha.Status`) %>% 
+  dplyr::select(-c(`Sample Number`, `Follow Number`, 
+                   `Month Collection`, `Year Collection`,
+                   `CAMP/LAB_specgravitymeter`, 
+                   `8OHdG_Result`:`tblAnalysis_TNF-alpha.Status`, 
+                   Date_Collected)) %>% 
+  # remove percent signs from some CVs so they can be analyzed numerically
+  mutate(gcsf_cv = as.numeric(gsub("%", "", gcsf_cv)),
+         il10_cv = as.numeric(gsub("%", "", il10_cv)),
+         il1ra_cv = as.numeric(gsub("%", "", il1ra_cv)),
+         il8_cv = as.numeric(gsub("%", "", il8_cv)),
+         mcp1_cv = as.numeric(gsub("%", "", mcp1_cv)),
+         tnfa_cv = as.numeric(gsub("%", "", tnfa_cv))) %>% 
+  # correct urine values for specific gravity
+  mutate(ohdg_sg  = (ohdg * ((1.024 - 1)/(specific_gravity - 1))),
+         tac_sg = (tac * ((1.024 - 1)/(specific_gravity - 1))),
+         neopterin_sg = (neopterin * ((1.024 - 1)/(specific_gravity - 1))),
+         cortisol_sg = (cortisol * ((1.024 - 1)/(specific_gravity - 1))),
+         gcsf_sg = (gcsf * ((1.024 - 1)/(specific_gravity - 1))),
+         il10_sg = (il10 * ((1.024 - 1)/(specific_gravity - 1))),
+         il8_sg = (il8 * ((1.024 - 1)/(specific_gravity - 1))),
+         il1ra_sg = (il1ra * ((1.024 - 1)/(specific_gravity - 1))),
+         mcp1_sg = (mcp1 * ((1.024 - 1)/(specific_gravity - 1))),
+         tnfa_sg = (tnfa * ((1.024 - 1)/(specific_gravity - 1)))) %>% 
+  # recode field worker names
+  mutate(Who_collected_clean = case_when(
+    Who_Collected == "Pak Rahmad" ~ "Rahmadt",
+    Who_Collected == "tono" ~ "Tono",
+    Who_Collected == "Rahmatd" ~ "Rahmadt",
+    Who_Collected == "Bec" ~ "Rebecca",
+    Who_Collected == "Becca" ~ "Rebecca",
+    Who_Collected == "Wendy Erb" ~ "Wendy",
+    Who_Collected == "Yulia" ~ "Julia",
+    Who_Collected == "Nanon" ~ "Manon",
+    Who_Collected == "Ramahtd" ~ "Rahmadt",
+    Who_Collected == "Rahmat" ~ "Rahmadt", 
+    Who_Collected == "Ramahtd" ~"Rahmadt",
+    Who_Collected == "Pak Rahmatd" ~ "Rahmadt", 
+    Who_Collected == "idun" ~ "Idun", 
+    Who_Collected == "ern" ~ "Erin",
+    Who_Collected == "Ern" ~ "Erin",
+    Who_Collected == "alysse" ~ "Alysse", 
+    Who_Collected == "Tonno" ~ "Tono",
+    Who_Collected == "Beth Barrow" ~ "Beth",
+    Who_Collected == "2014" ~ "Unknown",
+    Who_Collected == "Liz Ballare" ~ "Liz",
+    Who_Collected == "Rahmatal" ~ "Rahmadt",
+    Who_Collected == "Mawas" ~ "Unknown",
+    Who_Collected == "Sony" ~ "Unknown",
+    Who_Collected == "Otto" ~ "Unknown",
+    Who_Collected == "Kerry" ~ "Unknown",
+    Who_Collected == "Niko" ~ "Unknown",
+    Who_Collected == "Sofi" ~ "Sophia",
+    Who_Collected == "Alie" ~ "Allie",
+    Who_Collected == "Rebecca Brittain" ~ "Rebecca",
+    TRUE ~ as.character(Who_Collected))) %>% 
+  mutate(Age_Class = case_when(
+    Age_Class == "adult flanged male" ~ "AFM",
+    Age_Class == "adult female with dependent" ~ "AFwD",
+    Age_Class == "adult unflanged male" ~ "UFM",
+    Age_Class == "adult female no dependent" ~ "AFnD",
+    Age_Class == "independent immature (older juvs)" ~ "II",
+    Age_Class == "dependent immature - clinging infant (0-4yrs)" ~ "DIC",
+    Age_Class == "dependent immature non-clinging infant (4yrs-weaned)" ~ "DINC",
+    Age_Class == "semi-independent immature (juveniles)" ~ "SII",
+    TRUE ~ as.character(Age_Class))) %>% 
+  # relevel age-sex classes
+  mutate(Age_Cat = factor(Age_Class, levels = c("DIC", "DINC", "SII", "II", 
+                                                "UFM", "AFM", "AFnD", "AFwD"))) %>% 
+  # truncate the age-categories into simpler and more useful
+  mutate(Age_Cat_trunc = case_when(
+    Age_Cat == "DIC" ~ "Juvenile",
+    Age_Cat == "DINC" ~ "Juvenile",
+    Age_Cat == "SII" ~ "Juvenile",
+    Age_Cat == "II" ~ "Juvenile",
+    Age_Cat == "AFwD" ~ "Adult Female",
+    Age_Cat == "AFnD" ~ "Adult Female",
+    Age_Cat == "AFM" ~ "Flanged Male",
+    Age_Cat == "UFM" ~ "Unflanged Male",
+    TRUE ~ as.character(Age_Cat))) %>% 
+  # relevel truncated age sex classes
+  mutate(Age_Cat_trunc = factor(Age_Cat_trunc, levels = c("Juvenile", 
+                                                          "Adult Female", 
+                                                          "Unflanged Male", 
+                                                          "Flanged Male"))) %>% 
+  # left join in elbm data from caitlin
+  # double check i used the correct file and data
+  left_join(., creat_clean, by = "sample_number") %>% 
+  # defining what we want to be NA
+  mutate(ohdg_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | ohdg_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ ohdg_sg),
+         tac_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | tac_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ tac_sg),
+         neop_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | neopterin_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ neopterin_sg),
+         cort_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | cortisol_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ cortisol_sg),
+         gcsf_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | gcsf_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ gcsf_sg),
+         il10_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | il10_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ il10_sg),
+         il1ra_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | il1ra_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ il1ra_sg),
+         il8_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | il8_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ il8_sg),
+         mcp1_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | mcp1_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ mcp1_sg),
+         tnfa_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | tnfa_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ tnfa_sg),
+         elbm_include = case_when(First_Urine_Day == "FALSE" | Cold_Thermos == "FALSE" | creatinine_cv > 15 | specific_gravity <= 1.003 ~ as.numeric(NA),
+                                  TRUE ~ residual)) %>% 
+  # flagging outliers
+  mutate(ohdg_out_z = ifelse(ohdg_include > outlier_high(ohdg_include) | ohdg_include < outlier_low(ohdg_include), "Z-outlier", "not_outlier"),
+         tac_out_z =  ifelse(tac_include > outlier_high(tac_include) | tac_include < outlier_low(tac_include), "Z-outlier", "not_outlier"),
+         neop_out_z = ifelse(neop_include > outlier_high(neop_include) | neop_include < outlier_low(neop_include), "Z-outlier", "not_outlier"),
+         cort_out_z = ifelse(cort_include > outlier_high(cort_include) | cort_include < outlier_low(cort_include), "Z-outlier", "not_outlier"),
+         elbm_out_z = ifelse(elbm_include > outlier_high(elbm_include) | elbm_include < outlier_low(elbm_include), "Z-outlier", "not_outlier")) %>% 
+  arrange(ohdg_include) %>% 
+  mutate(ohdg_dist = round(ohdg_include - lag(ohdg_include, n = 1), digits = 2)) %>% 
+  arrange(tac_include) %>% 
+  mutate(tac_dist = round(tac_include - lag(tac_include, n = 1), digits = 2)) %>% 
+  arrange(neop_include) %>% 
+  mutate(neop_dist = round(neop_include - lag(neop_include, n = 1), digits = 2)) %>% 
+  arrange(cort_include) %>% 
+  mutate(cort_dist = round(cort_include - lag(cort_include, n = 1), digits = 2)) %>% 
+  left_join(., forest_strip, by = c("sample_number")) %>% 
+  # relevel chemstrip data
+  mutate(forest_glucose = fct_relevel(FOREST_glucose, "negative", "normal", "50", 
+                                      "100", "250", "500", "1000"),
+         forest_erythrocytes = fct_relevel(FOREST_erythrocytes, "negative", "trace", 
+                                           "about 50", "about 250"),
+         forest_bilirubin = fct_relevel(FOREST_bilirubin, "negative", "trace+", 
+                                        "moderate++", "large+++"),
+         forest_urobilinogen = fct_relevel(FOREST_urobilinogen, "negative", 
+                                           "normal", "1", "4", "8", "12"),
+         # need to group small and negative together
+         forest_ketone_djn = ifelse(FOREST_ketones %in% c("negative", "small+"), 
+                                    "negative-small", FOREST_ketones),
+         forest_ketones = fct_relevel(forest_ketone_djn, "negative-small",
+                                      "moderate++", "large+++"),
+         forest_protein = fct_relevel(FOREST_protein, "negative", "trace",
+                                      "30+", "100++", "500+++"),
+         forest_nitrite = fct_relevel(FOREST_ntrite, "negative", "positive"),
+         forest_leukocytes = fct_relevel(FOREST_leukocytes, "negative", 
+                                         "trace", "trace+", "mod++"),
+         Age_Class = fct_relevel(Age_Class, "DIC", "DINC", "SII", "II", 
+                                 "AFnD", "AFwD", "UFM", "AFM")) %>% 
+  dplyr::select(-c(FOREST_Chemtrip_Comburtest:FOREST_erythrocytes, forest_ketone_djn)) %>% 
+  mutate(elbm = resid)
+  
+ 
+
+
+rm(creat_clean)
+rm(creat_elbm_data)
+rm(urine_data_raw)
+rm(forest_strip)
+rm(mod_elbm)
+
+```
+
+
+
+### Project Description
+
+This report is part of a straightforward project intended to determine whether immune and stress responses cause/result in/associate with oxidative stress in a wild orangutan population. Some or all of these findings may be merged with the tuanan_dietary_restriction_oxidative_stress_inflammation_cortisol project focusing on DR. However, I want to work out this biomarker-only part first, and then relate them to diet, and see if the two stories should be merged or if the amount of information is too substantial to put them together.
+
+The question is meta-analyzed in birds in Costantini and Moller. I will be focusing on oxidative stress (acronym: OS) as a response, with immune responses (WBC, neopterin, cytokines) and stress responses (cortisol) as potential drivers of increased oxidative stress. As part of this, I would want to test whether there are age-sex differences in oxidative stress, and if I can, try to detect seasonal trends perhaps using the GAMM approach of polansky and robbins 2013 or by one of Gavin Simpson's blogposts. 
+
+I may want to include the creatinine-residual data from caitlin, as there are myogenic and myoanabolic links between oxidative stress and lean muscle mass. ROS can stimulate expression and activity of skeletal muscle protein degradation pathways (muscle wasting).
+
+Co-Authors: Erin R. Vogel, Rebecca S.A. Brittain, Tim Bransford (? cortisol), Alysse Moldawer (? cytokines), Lync Moldawer (? cytokines), Sri Suci Utami Atmoko, Caitlin S.A. O'Connell (ran a lot of neopterin).
+
+How do orang neopterin levels compare to neopterin in other NHPs? - Probably answered in Liz's dissertation.
+
+
+### Summary of EDA Findings
+
+Results focus on standard inclusion criteria (first morning void, stored on ice in the field, CV below 15%, and specific gravity above 1.003) and for each biomarker, outliers are removed if they are more than 3 standard deviatiosn away from the mean. Additionally, cortisol values are restricted to below 250,000.
+
+For fitting mixed models, the following distributions were determined to be best:
+
+  * 8-OHdG - log-normal
+  * TAC - Gamma
+  * Neopterin - log-normal
+  * Cortisol - Gamma
+  * ELBM - normal
+  
+For covariation between biomarkers and age sex class, truncated classes were chosen. All infants and juveniles were grouped together, all adult females were grouped, and adult males were separated into flanged and unflanged.
+
+  * No apparent differences in 8-OHdG between age sex classes.
+  * No apparent differences in TAC between age sex classes.
+  * Some small differences in neopterin between age sex classes. Flanged Males exhibit higher inflammation.
+  * Seems flanged males might have higher cortisol levels but needs more exploration.
+
+### Data Details
+
+* dimensions
+* for all urine samples
+  * Number of samples per orangutan
+  * number of samples per field worker
+  * number of samples per fai tercile
+  * number of samples per year
+* biomarker data inclusion criteria
+  * start with total number of samples with each measurement
+  * remove poor CVs
+  * remove low specific gravity
+  * maybe remove 1.5 times IQR outliers, but definitely box plot before this step
+  * non-first morning voids
+  * contaminated with fecal matter
+  * status not "ok"
+*
+  * Maria file from caitlin paper with individual IDs
+
+#### To Check
+
+* orangutan names, make sure they're correct
+* double check age-classes
+* if a cytokine is marked as zero, it was below the limit of detection
+  * i say give it a random non-zero number that is within the LOD range
+
+```{r table of all samples}
+
+
+urine_df %>% 
+  dplyr::select(ohdg, tac, neopterin, cortisol, gcsf, il10, 
+                il1ra, il8, mcp1, tnfa) %>% 
+  pivot_longer(cols = ohdg:tnfa, 
+               names_to = "biomarker", 
+               values_to = "concentration") %>% 
+  # recode biomarker names
+  mutate(biomarker = recode(biomarker, "ohdg" = "8-OHdG", "tac" = "Total Antioxidant Capacity",
+         "neopterin" = "Neopterin", "cortisol" = "Cortisol", "gcsf" = "G-CSF",
+         "il10" = "IL-10", "il1ra" = "IL-1Ra", "il8" = "IL-8/CXCL-8", 
+         "mcp1" = "MCP-1", "tnfa" = "TNF_a")) %>% 
+  group_by(biomarker) %>% 
+  summarise(non_na = sum(!is.na(concentration)),
+            minimum = min(concentration, na.rm = TRUE),
+            maximum = max(concentration, na.rm = TRUE)) %>% 
+  kbl(caption = "Table 1a: All assayed samples without any removed and no specific gravity correction applied") %>% 
+  kable_classic()
+
+```
+
+I still need to do something with the zero values for the cytokines, as they're not really zero.
+
+&nbsp;
+
+
+
+#### How many biomarker values does each individual orangutan have?
+
+I need to double check that the values in the database under Orangutan_ID are indeed correct. Maria sent an excel file with a list of follow and sample numbers and the correct names and age_sex classes. I should merge this in and use those instead of any values in the urine database because I am not sure they've been QC'd. 
+
+This table has been arranged by number of 8-OHdG samples in descending order. Total biomarker values indicates the sum of all assayed samples. I also only used samples that satisfied primary inclusion criteria: kept in thermos in field, SG not dilute, a first morning void, and the CV for the given assay sample was below 15%.
+
+```{r supplement table of samples by orangutan}
+
+urine_df %>% 
+  dplyr::select(Orangutan_ID, ohdg_include, tac_include, neop_include, cort_include, 
+                gcsf_include, il10_include, il1ra_include, il8_include, mcp1_include, tnfa_include) %>% 
+  pivot_longer(cols = ohdg_include:tnfa_include, names_to = "biomarker", values_to = "concentration") %>% 
+  # recode biomarker names
+  mutate(biomarker = recode(biomarker, "ohdg_include" = "8-OHdG", 
+                            "tac_include" = "Total Antioxidant Capacity",
+                            "neop_include" = "Neopterin", 
+                            "cort_include" = "Cortisol", 
+                            "gcsf_include" = "G-CSF",
+                            "il10_include" = "IL-10", 
+                            "il1ra_include" = "IL-1Ra", 
+                            "il8_include" = "IL-8/CXCL-8", 
+                            "mcp1_include" = "MCP-1", 
+                            "tnfa_include" = "TNF_a")) %>% 
+  group_by(Orangutan_ID, biomarker) %>% 
+  summarise(num_samples = sum(!is.na(concentration))) %>% 
+  pivot_wider(names_from = "biomarker", values_from = "num_samples") %>% 
+  mutate(total_biomarker_values = rowSums(across(where(is.numeric)))) %>% 
+  filter(total_biomarker_values > 0)  %>% 
+  arrange(desc(`8-OHdG`)) %>% 
+  kbl(caption = "Table 1c: All assayed samples by individual orangutan") %>% 
+  kable_classic()
+
+
+```
+
+
+
+&nbsp;
+
+
+#### How many assayed samples of each biomarker meet each inclusion criterion?
+
+I want to look at each of my inclusion criterion to determine whether any lead to significant loss of sample numbers or change balance fo the data, ultimately reducing power. When I know that a given exclusion criterion reduces power, I can make a judgement call as to what to do.
+
+The inclusion criteria are as follows:
+
+1. Sample is not dilute (specific gravity > 1.003)
+2. Sample assay was precise (CV is equal to or below 15%)
+3. Sample is from a first morning void
+4. Assay was determined to have run appropriately (Sample assay status is OK, not set to 'rerun')
+
+
+
+```{r table of samples by inclusion criteria}
+
+
+urine_df %>% 
+  dplyr::select(ohdg, tac, neopterin, cortisol, gcsf, il10, il1ra, il8, mcp1, 
+                tnfa, specific_gravity, First_Urine_Day, Cold_Thermos) %>% 
+  pivot_longer(cols = ohdg:tnfa, names_to = "biomarker", values_to = "concentration") %>% 
+  # recode biomarker names
+  mutate(biomarker = recode(biomarker, "ohdg" = "8-OHdG", "tac" = "Total Antioxidant Capacity",
+         "neopterin" = "Neopterin", "cortisol" = "Cortisol", "gcsf" = "G-CSF",
+         "il10" = "IL-10", "il1ra" = "IL-1Ra", "il8" = "IL-8/CXCL-8", "mcp1" = "MCP-1", "tnfa" = "TNF_a")) %>% 
+  group_by(biomarker) %>% 
+  summarise(non_na = sum(!is.na(concentration)),
+            sg_above_1003 = sum(!is.na(concentration[specific_gravity > 1.003])),
+            perc_sg = round((sg_above_1003 / non_na * 100), digits = 2),
+            cold_thermos = sum(!is.na(concentration[Cold_Thermos == TRUE])),
+            perc_cold = round((cold_thermos / non_na * 100), digits = 2),
+            first_void = sum(!is.na(concentration[First_Urine_Day == TRUE])),
+            perc_void = round((first_void / non_na * 100), digits = 2)) %>% 
+  # add parentheses and percent sign to percent columns for table viewing
+  mutate(perc_sg = paste0("(", perc_sg, "%", ")"),
+         perc_cold = paste0("(", perc_cold, "%", ")"),
+         perc_void = paste0("(", perc_void, "%", ")")) %>%
+  # paste the value and percent columns together for table viewing
+  mutate(sg_samples = paste(sg_above_1003, perc_sg, sep = " "),
+         cold_samples = paste(cold_thermos, perc_cold, sep = " "),
+         void_samples = paste(first_void, perc_void, sep = " ")) %>% 
+  # remove prior columns so only combos are kept
+  dplyr::select(-c(sg_above_1003:perc_void)) %>% 
+  kbl(caption = "Table 1d: The number of assayed samples by biomarker that meet each inclusion criterion",
+      col.names = c("Biomarker", "# of Total Assayed Samples", "SG > 1.003", 
+                    "Stored in Thermos",
+                    "First Morning Voids"),
+      align = c('c')) %>% 
+  kable_classic()
+
+```
+
+Ok, I will calculate percentages for each of these variables, surround the percentages in parentheses and add a percent sign, then merge the pairs of columns together in the final product. Should be able to use column_spec to add the parentheses and percentages.
+
+After filtering out samples that were not stored in a cold thermos in the field, were not first morning voids, were too dilute, and had poor CVs, the following number of samples remained for each biomarker.
+
+`r colSums(!is.na(urine_df %>% dplyr::select(ohdg_include:tnfa_include)))`
+
+
+&nbsp;
+
+#### How many samples have a status of "ok"?
+
+For this one I need to make sure all records have a value here. Otherwise some NAs may get removed. I have not yet created this table.
+
+
+&nbsp;
+
+### Variation
+
+#### General Notes: 
+
+I am not yet sure how I want to deal with outliers. Many papers use the 1.5 * IQR method; this is reasonable. The outliers themselves should be investigated to see if I can determine why they are outliers. If there is an error, I can remove them. If they are part of natural variation, I may keep or remove them. If they are removed but seem to be accurate values, I may want to provide supplementary information on the samples in a table providing any relevant information on them.
+
+&nbsp;
+
+#### 8-OHdG Variation
+
+There appears to be a few pretty large outliers in the >90 range. A natural log transformation creates a vaguely normal distribution with some pretty long tails on either end and the potential for a little bimodality around ln2.7. The skewness of the SG-corrected 8-OHdG is `r skewness(urine_df[urine_df$Cold_Thermos == TRUE & urine_df$First_Urine_Day == TRUE & urine_df$specific_gravity > 1.003 & urine_df$ohdg_cv <= 15, c("ohdg_include")], na.rm = TRUE)` and kurtosis is `r kurtosis(urine_df[urine_df$Cold_Thermos == TRUE & urine_df$First_Urine_Day == TRUE & urine_df$specific_gravity > 1.003 & urine_df$ohdg_cv <= 15, c("ohdg_include")], na.rm = TRUE)`
+
+The skewness of the natural logged 8-OHdG is `r skewness(log(urine_df[urine_df$Cold_Thermos == TRUE & urine_df$First_Urine_Day == TRUE & urine_df$specific_gravity > 1.003 & urine_df$ohdg_cv <= 15, c("ohdg_include")]), na.rm = TRUE)` and the kurtosis is `r kurtosis(log(urine_df[urine_df$Cold_Thermos == TRUE & urine_df$First_Urine_Day == TRUE & urine_df$specific_gravity > 1.003 & urine_df$ohdg_cv <= 15, c("ohdg_include")]), na.rm = TRUE)`. So there is a considerable reduction in both skew and kurtosis after a natural log transformation, but the distribution of these data should be explored further. Is there a reason for that near-bimodality? Age-sex class?
+
+
+```{r plot distribution of ohdg}
+
+
+# 8-OHdG Distribution
+
+grid.arrange(
+  urine_df %>%  
+  ggplot(., aes(x = ohdg_include)) +
+  geom_histogram(bins = 50) +
+  labs(x = "8-OHdG") +
+  theme_bw(),
+  urine_df %>%  
+  ggplot(., aes(x = log(ohdg_include))) +
+  geom_histogram(bins = 50) +
+  labs(x = "ln(8-OHdG)") +
+  theme_bw(),
+  ncol = 1
+)
+
+
+```
+
+
+
+&nbsp;
+
+#### TAC Variation
+
+Variation in TAC seems to be the most interesting at first glance, as it is the most unique distribution. The units are in uM, not umol/L. But the transformation is a linear scale so the shape of the distribution will not change. It is possible that removing TAC values < 20uM might help, but the right tail is not too extreme. I am also reluctant to remove TAC values because they are so essential to interpreting oxidative stress. These high TAC values may be staving off (or failing to stave off) oxidative stress. If 8-OHdG is low during these high periods, it suggests the individual is dealing with something that is causing a lot of oxidative stress, but the body is otherwise successfully dealing with the problem as DNA damage does not increase. On the otherhand, if 8-OHdG is high in this upper range of TAC, it suggests the body is mounting a strong defense but it is not enough. I would want to check this. In addition, I want to see which individuals these high values are from, and if they have lower values as well or if some individuals just tend to produce higher values. Plot TAC over time by individual and see if any are typically high at all times. If such an individual exists, it is probably part of their own natural biology, and not indicative of chronic free radical generation.
+
+```{r plot distribution of tac}
+
+# Total Antioxidant Capacity Distribution
+
+grid.arrange(
+  urine_df %>% 
+  ggplot(., aes(x = tac_include)) +
+  geom_histogram(bins = 50) +
+  labs(x = "TAC") +
+  theme_bw(),
+  urine_df %>% 
+  ggplot(., aes(x = log(tac_include))) +
+  geom_histogram(bins = 50) +
+  labs(x = "ln(TAC)") +
+  theme_bw(),
+  ncol = 1
+)
+
+```
+
+&nbsp;
+
+#### Neopterin Variation
+
+Neopterin, like cortisol below, has some pretty extreme outliers, though not to the same extent as cortisol. A natural log transformation does seem to bring these values together. However, I think I'd rather model the actual data using GAMMs as those values are much more interpretable than trying to understand the logged effects of biomarkers on each other.
+
+```{r plot distribution of neopterin}
+
+
+# Neopterin Distribution
+
+grid.arrange(
+  urine_df %>% 
+  ggplot(., aes(x = neop_include)) +
+  geom_histogram(bins = 50) +
+  labs(x = "TAC") +
+  theme_bw(),
+  urine_df %>% 
+  ggplot(., aes(x = log(neop_include))) +
+  geom_histogram(bins = 50) +
+  labs(x = "ln(Neopterin)") +
+  theme_bw(),
+  ncol = 1
+)
+
+```
+
+
+&nbsp;
+
+#### Cortisol Variation
+
+You can see there are a small handful of extraordinarily extreme values of cortisol. They definitely need to be checked to determine if they are indeed correct. To temporarily view the distribution without these extreme values, I replicated the plots with X removed.
+
+```{r plot distribution of cortisol}
+
+# Cortisol Distribution
+
+grid.arrange(
+  urine_df %>% 
+  ggplot(., aes(x = cort_include)) +
+  geom_histogram(bins = 50) +
+  labs(x = "Cortisol - All") +
+  theme_bw(),
+  urine_df %>% 
+  ggplot(., aes(x = log(cort_include))) +
+  geom_histogram(bins = 50) +
+  labs(x = "ln(Cortisol - All)") +
+  theme_bw(),
+  urine_df %>% 
+  filter(cort_include < 750000) %>% 
+  ggplot(., aes(x = cort_include)) +
+  geom_histogram(bins = 50) +
+  labs(x = "Cortisol < 750k") +
+  theme_bw(),
+  urine_df %>% 
+  filter(cort_include < 750000)  %>% 
+  ggplot(., aes(x = log(cort_include))) +
+  geom_histogram(bins = 50) +
+  labs(x = "ln(Cortisol - < 750k)") +
+  theme_bw(),
+  urine_df %>% 
+  filter(cort_include < 250000) %>% 
+  ggplot(., aes(x = cort_include)) +
+  geom_histogram(bins = 50) +
+  labs(x = "Cortisol < 250k") +
+  theme_bw(),
+  urine_df %>% 
+  filter(cort_include < 250000)  %>% 
+  ggplot(., aes(x = log(cort_include))) +
+  geom_histogram(bins = 50) +
+  labs(x = "ln(Cortisol - < 250k)") +
+  theme_bw(),
+  ncol = 2
+)
+
+
+```
+
+
+```{r cortisol skew and kurtosis}
+
+# calculate skewness for cortisol with all values, values below 750k, and values below 250k
+
+cort_skew <- c(skewness(urine_df[urine_df$Cold_Thermos == TRUE & urine_df$First_Urine_Day == TRUE & urine_df$specific_gravity > 1.003 & urine_df$cortisol_cv <= 15, 
+                                 c("cort_include")], 
+                        na.rm = TRUE),
+               skewness(urine_df[urine_df$Cold_Thermos == TRUE & urine_df$First_Urine_Day == TRUE & urine_df$specific_gravity > 1.003 & urine_df$cortisol_cv <= 15 & urine_df$cort_include < 750000, 
+                                 c("cort_include")], 
+                        na.rm = TRUE),
+               skewness(urine_df[urine_df$Cold_Thermos == TRUE & urine_df$First_Urine_Day == TRUE & urine_df$specific_gravity > 1.003 & urine_df$cortisol_cv <= 15 & urine_df$cort_include < 250000, 
+                                 c("cort_include")], 
+                        na.rm = TRUE))
+
+# calculate kurtosis for cortisol with all values, values below 750k, and values below 250k
+
+cort_kurt <- c(kurtosis(urine_df[urine_df$Cold_Thermos == TRUE & urine_df$First_Urine_Day == TRUE & urine_df$specific_gravity > 1.003 & urine_df$cortisol_cv <= 15, 
+                                 c("cort_include")], 
+                        na.rm = TRUE),
+               kurtosis(urine_df[urine_df$Cold_Thermos == TRUE & urine_df$First_Urine_Day == TRUE & urine_df$specific_gravity > 1.003 & urine_df$cortisol_cv <= 15 & urine_df$cort_include < 750000, 
+                                 c("cort_include")], 
+                        na.rm = TRUE),
+               kurtosis(urine_df[urine_df$Cold_Thermos == TRUE & urine_df$First_Urine_Day == TRUE & urine_df$specific_gravity > 1.003 & urine_df$cortisol_cv <= 15 & urine_df$cort_include < 250000, 
+                                 c("cort_include")], 
+                        na.rm = TRUE))
+
+# create df of skew and kurtosis of cortisol to make kable table
+cort_dist <- cbind(cort_skew, cort_kurt)
+rownames(cort_dist) <-  c("All cortisol values", "Cortisol < 750k", "Cortisol < 250k")
+
+
+kbl(cort_dist, col.names = c("Skewness", "Kurtosis"),
+    caption = "Table: Skewness and Kurtosis of cortisol at different levels of outlier removal; only samples that meet inclusion criteria used",
+    align = c('c')) %>% 
+  kable_classic()
+
+
+```
+
+There is a pretty dramatic reduction in kurtosis when the most extreme outliers are removed. The reasoning for these outliers, be they error or some latent features, should be explored. In-depth exploration is probably beyond the scope of this paper; some decision must be made for which cortisol values to include and this decision must be justifiable.
+
+
+&nbsp;
+
+
+
+#### ELBM Distribution
+
+
+I think I will keep in the outliers for now, and then see what to do about them later. 
+*Note: as I was plotting covariation below, I routinely removed the ELBM outlier above 2*
+
+```{r distribution of elbm}
+
+# ELBM Distribution
+
+grid.arrange(
+  urine_df %>% 
+  ggplot(., aes(x = elbm_include)) +
+  geom_histogram(bins = 50) +
+  labs(x = "ELBM") +
+  theme_bw(),
+  urine_df %>% 
+  filter(elbm_include < 1.5) %>% 
+  ggplot(., aes(x = elbm_include)) +
+  geom_histogram(bins = 50) +
+  labs(x = "ELBM < 1.5") +
+  theme_bw(),
+  ncol = 1
+)
+
+```
+
+&nbsp;
+
+#### General Notes on Biomarker Distribution
+
+There is some pretty heavy right tails in these data, regardless of how many outliers are removed. Special attention will need to be paid to these outliers given their sheer scale. 
+
+There is an outlier-robust GAM fitting package (rgam) that may be of use. It uses a backfitting algorithm with weights derived from robust quasi-likelihood equations. Original publication: Azadeh, A. and Salibian-Barrera, M. (2011). *An outlier-robust fit for Generalized Additive Models with applications to disease outbreak detection.* 
+
+&nbsp;
+
+
+
+### Outlier Analysis
+
+Before proceeding beyond my analysis of variation of each of the biomarkers, I need to better understand what data points are outliers, why they are so different from the rest of the data, and then decide how to handle them. There are a range of techniques I could use to detect filters: z-score and flag points beyond the -3:3 z-score range, flag points outside the 1.5 * IQR range, Expectation Maximization, Mahalanobis Distance, and DBSCAN. I will focus on the last 3 first as ML algorithms and compare their findings. I will likely stick with DBSCAN as it requires fewer assumptions, but I want to check first.
+
+*Note: On returning to this point, I am not sure how much exploration is useful here or if avoiding it is more laziness. The ML approaches seem a bit overkill.*
+
+I want to flag each biomarker as an outlier under each method so that I can then determine if there is anything going on about them.
+
+I created two markers for flagging each biomarker as an outlier. The first is based on -3:3 z-score. The second arranges the values of a biomarker in ascending order and calculates the distance between successive points. My motivation was that the z-score (and IQR) method(s) seem very restrictive; several reasonable variables were cut out because the average of the biomarker was lower. The distance metric for 8-OHdG, for example, shows that the only data ponits that were very different from the values around it were the last two, which exhibited jumps of over 30 and 50, while all other distances were well below 5 or 10.
+
+
+&nbsp;
+
+
+*Note: After looking at a lot of the distribution and box plots, I am going with the Z-score (aka +/- 3SD) approach to identifying and removing outliers. Only the most extreme values are removed, and this approach is rather common among published papers. Work on the distance outliers can now be found in the supplement.*
+
+&nbsp;
+
+
+
+
+### Covariation
+
+#### Covaration between Biomarkers Alone
+
+&nbsp;
+
+```{r all raw biomarkers against each other inclusion criteria}
+
+plot(urine_df[, c("ohdg_include", "tac_include", "neop_include", "cort_include", "elbm_include")],
+     main = "Biomarker Covariation with Standard Inclusion Criteria")
+```
+
+With outliers, it is difficult to determine any serious relationships.
+
+&nbsp;
+
+```{r all biomarkers against each other with z outliers removed}
+urine_df %>% 
+  dplyr::select(ohdg_include:cort_include, elbm_include,
+                ohdg_out_z:elbm_out_z) %>% 
+  # keep only biomarkers that are within 3SD
+  mutate(ohdg = ifelse(ohdg_out_z == "Z-outlier", NA, ohdg_include),
+         tac = ifelse(tac_out_z == "Z-outlier", NA, tac_include),
+         neop = ifelse(neop_out_z == "Z-outlier", NA, neop_include),
+         cort = ifelse(cort_out_z == "Z-outlier", NA, cort_include),
+         elbm = ifelse(elbm_out_z == "Z-outlier", NA, elbm_include)) %>% 
+  dplyr::select(ohdg:elbm) %>% 
+  plot(.,
+       main = "Biomarker Covariation with Z-Outliers Removed")
+
+```
+
+With outliers removed, several positive relationships do appear. 8-OHdG and TAC, TAC with maybe neopterin, 8-OHdG and neopterin, and ELBM with 8-OHdG, neopterin, and possibly cortisol.
+
+&nbsp;
+
+#### Covariation Between Biomarkers and Truncated Age-Sex Classes
+
+&nbsp;
+
+
+##### __8-OHdG__
+
+
+```{r ohdg by truncated age sex class}
+
+# standard inclusion criteria
+
+ggplot(urine_df %>% drop_na(ohdg_include), 
+       aes(x = Age_Cat_trunc, y = ohdg_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "8-OHdG",
+       title = "8-OHdG with Standard Inclusion Criteria",
+       subtitle = "#s Indicate Urine Samples")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# z score outliers removed
+
+ggplot(urine_df %>% filter(ohdg_out_z == "not_outlier"), 
+       aes(x = Age_Cat_trunc, y = ohdg_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "8-OHdG",
+       title = "8-OHdG Z-Score Outliers Removed",
+       subtitle = "#s Indicate Urine Samples")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+```
+
+When looking at the samples with outliers removed, it almost looks like adult males may have higher 8-OHdG on average compared to females.
+
+&nbsp;
+
+
+##### __TAC__
+
+
+```{r tac by truncated age-sex classes}
+
+# standard inclusion criteria
+
+ggplot(urine_df %>% drop_na(tac_include), 
+         aes(x = Age_Cat_trunc, y = tac_include, na.rm = TRUE)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "TAC",
+       title = "TAC with Standard Inclusion Criteria",
+       subtitle = "#s Indicate Urine Samples")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# z-score outliers removed
+
+ggplot(urine_df %>% filter(tac_out_z == "not_outlier"), 
+         aes(x = Age_Cat_trunc, y = tac_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "TAC",
+       title = "TAC Z-Score Outliers Removed",
+       subtitle = "#s Indicate Urine Samples")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+
+```
+
+It looks like adult flanged males *might* have depressed antioxidants relative to unflanged males. However the difference in sample sizes (23 vs 151) warrants further exploration before any definitive conclusion is drawn. Some latent factor might drive this difference, especially given the range of unflanged male values falls entirely within that of the adult flanged males. Otherwise all groups seem to have a similar median and IQR.
+
+&nbsp;
+
+
+##### __Neopterin__
+
+
+```{r neopterin by truncated age sex class}
+
+# standard inclusion criteria
+
+ggplot(urine_df %>% drop_na(neop_include), 
+         aes(x = Age_Cat_trunc, y = neop_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Neopterin",
+       title = "Neopterin with Standard Inclusion Criteria",
+       subtitle = "#s Indicate Urine Samples")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# one large outlier removed
+
+ggplot(urine_df %>% filter(neop_include < 7500), 
+         aes(x = Age_Cat_trunc, y = neop_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Neopterin (< 7500)",
+       title = "Neopterin with Single High Outlier Removed",
+       subtitle = "#s Indicate Urine Samples")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# z-score outliers removed
+
+ggplot(urine_df %>% filter(neop_out_z == "not_outlier"), 
+         aes(x = Age_Cat_trunc, y = neop_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Neopterin",
+       title = "Neopterin Z-Score Outliers Removed",
+       subtitle = "#s Indicate Urine Samples")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+```
+
+Looks like adult flanged males are dealing with greater inflammation on average when compared to adult females or adult unflanged males. This would probably fit with the idea that flanging is a costly process and the allocation of limited resources to growth and maintenance during adulthood pulls from the energy necessary to handle infections. Or perhaps something about the behavior of flanged males makes them more susceptible to infection. It is possible that behavioral differences might drive this pattern; possible explanations include flanged males 1) interact with other orangutans more frequently than unflanged males and adult females or 2) that they spend more time on the ground than unflanged males or adult females, then assessing the occurrence of these events with inflammation. Either of these might increase flanged male exposure to pathogens.
+
+&nbsp;
+
+
+##### __Cortisol__
+
+
+```{r cortisol by truncated age-sex classes}
+
+# standard inclusion criteria
+
+ggplot(urine_df %>% drop_na(cort_include), 
+         aes(x = Age_Cat_trunc, y = cort_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Cortisol",
+       title = "Cortisol with Standard Inclusion Criteria",
+       subtitle = "#s Indicate Urine Samples")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# one large outlier removed
+
+ggplot(urine_df %>% filter(cort_include < 750000), 
+         aes(x = Age_Cat_trunc, y = cort_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Cortisol (<750k)",
+       title = "Cortisol (one big outlier removed)",
+       subtitle = "#s Indicate Urine Samples")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# z-score outliers removed
+
+ggplot(urine_df %>% filter(cort_out_z == "not_outlier"), 
+         aes(x = Age_Cat_trunc, y = cort_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Cortisol",
+       title = "Cortisol with Z-score outlier removed",
+       subtitle = "#s Indicate Urine Samples")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+```
+
+Looks like adult flanged males might be dealing with elevated cortisol relative to all other age-sex classes. Other age-classes have similar levels.
+
+&nbsp;
+
+
+##### __ELBM__
+
+
+```{r elbm by truncated age sex classes}
+
+# standard inclusion criteria
+
+ggplot(urine_df %>% drop_na(elbm_include), 
+         aes(x = Age_Cat_trunc, y = elbm_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "ELBM",
+       title = "ELBM Standard Inclusion Criteria",
+       subtitle = "#s Indicate Urine Samples")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# z-score outliers removed
+ggplot(urine_df %>% filter(elbm_out_z == "not_outlier"), 
+         aes(x = Age_Cat_trunc, y = elbm_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "ELBM",
+       title = "ELBM Z-Score Outlier removed",
+       subtitle = "#s Indicate Urine Samples")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+```
+
+This is not new, basically partly replicated from O'Connell et al. 2021. I just wanted to visualize it within this report.
+
+
+&nbsp;
+
+
+#### Formally Test Difference in Biomarkers by Age-Sex class
+
+Note that link functions for each response variable are determined in the supplement.
+
+I am thinking I should either combine all dependents into a single category or a young male and young female category, and then probably merge the two adult female categories together.
+
+I am following what was done in the O'Connell et al. 2021 paper, using GAMMs to test for significant differences between age-sex classes. She used gamm4, I will use mgcv::gamm. I will need to check about the distribution family that best works for each biomarker, potentially remove individuals with low sampling, and remove or group age-sex classes with very few data points, because data are quite unbalanced. currently have a random intercept by individual, not a random slope. There are few samples so this might not be possible. Note that Caitlin is exploring Neopterin, so any results of age-class ~ neopterin are just for funsies and will not be published.
+
+&nbsp;
+
+
+##### __8-OHdG__
+
+```{r test ohdg by age class using gamm}
+
+
+# set flanged males as the base to be compared against
+# may want to drop the non-adults, or group them together
+
+urine_df$Age_Cat_trunc <- relevel(urine_df$Age_Cat_trunc, "Flanged Male")
+
+
+# model with z-score outliers removed
+ageclass_ohdg_zmod <- gamm(ohdg_include ~ Age_Cat_trunc, 
+                           data = urine_df %>% filter(ohdg_out_z == "not_outlier"), 
+                           family = gaussian(link = "log"),
+                           random = list(Orangutan_ID=~1))
+summary(ageclass_ohdg_zmod$gam)
+
+
+
+# try a linear model
+
+mod_lin_ageclass_ohdg <- lmer(ohdg_include ~ 0 + Age_Cat_trunc + (1|Orangutan_ID), 
+                              data = urine_df)
+
+mod_lin_ageclass_ohdg_z <- lmer(ohdg_include ~ 0 + Age_Cat_trunc + (1|Orangutan_ID), 
+                                data = urine_df %>% filter(ohdg_out_z == "not_outlier"))
+
+emmeans(mod_lin_ageclass_ohdg_z, list(pairwise ~ Age_Cat_trunc), adjust = "tukey")
+
+
+```
+
+
+&nbsp;
+
+
+##### __TAC__
+
+```{r test tac by age class using gamm}
+
+### Gamma distribution indicated as best
+### for both standard and z removed TAC values
+
+
+# z-score outliers removed
+
+mod_tac_age_z <- gamm(tac_include ~ Age_Cat_trunc, 
+                      data = urine_df %>% filter(tac_out_z == "not_outlier"), 
+                      family = Gamma,
+                      random = list(Orangutan_ID=~1))
+summary(mod_tac_age_z$gam)
+AIC(mod_tac_age_z)
+plot(mod_tac_age_z$lme)
+
+```
+
+Well the standardized residuals vs fitted values are more homoscedastic and the AIC is lower in the model with outliers removed, but there is still at least one weird outlier. Only six samples ended up removed from this second model. Regardless, it would appear none of the age-sex categories are predictive of TAC. Not sure if this result would change if the categories were truncated. 
+
+&nbsp;
+
+
+##### __Neopterin__
+
+```{r test neop by age class using gamm}
+
+# gamm with outliers removed
+
+mod_neop_age <- gamm(neop_include ~ Age_Cat_trunc, 
+                     data = urine_df %>% filter(neop_out_z == "not_outlier"), 
+                     family = gaussian(link = "log"),
+                     random = list(Orangutan_ID=~1))
+summary(mod_neop_age$gam)
+#plot(mod_neop_age$lme)
+
+
+
+# try a linear model
+
+mod_lin_ageclass_neop_z <- lmer(neop_include ~ 0 + Age_Cat_trunc + (1|Orangutan_ID), 
+                                data = urine_df %>% filter(neop_out_z == "not_outlier"))
+
+emmeans(mod_lin_ageclass_neop_z, list(pairwise ~ Age_Cat_trunc), adjust = "tukey")
+
+
+```
+
+Adult flanged males have the higher neopterin than other groups. Not significant when looking at the linear model. Still not sure how the emmeans vs lmerTest p-values differ or hwo to really interpret them. Based on the emmeans and associated confidence intervals, FM are on average higher but the confidence intervals overlap a lot. Suggests age might not be a driver.
+
+&nbsp;
+
+
+##### __Cortisol__
+
+```{r test cort by age class using gamm}
+
+mod_cort_age <- gamm(cort_include ~ Age_Cat, 
+                     data = urine_df %>% filter(cort_out_z == "not_outlier" | cort_include < 250000), 
+                     family = Gamma,
+                     random = list(Orangutan_ID=~1))
+summary(mod_cort_age$gam)
+
+```
+
+Some large standardized residuals. At first glance it would appear that flanged males are more stressed, but not by a lot.
+
+
+&nbsp;
+
+
+
+
+```{r example code from digriorio, eval=FALSE, include=FALSE}
+
+
+GAMM ResidCre for FAI CONTINUOUS and Age-Sex CONDENSED, random = OuID 
+> ######################### GAMMs on Residuals #############################
+##First releveled for Adult Females to be the comparative
+##GAMM on Residual Creatinine w/  Age Sex condensed and continuous FAI, OU ID is random
+###below is the basic GAMM - you can only smooth continuous variables; we include a random effect of orangutan ID
+
+> SGCrCl3$AgeClassCond3 <- relevel(SGCrCl3$AgeClassCond3,"adult female")
+GAMMResCreXASxFAnum<-gamm4(ResidCre~s(FAINu3)+AgeClassCond3,data=SGCrCl3,random=~(1|OuID3)+(FAINu3+0|OuID3))
+> summary(GAMMResCreXASxFAnum$gam)
+GAMMResCreXASxFAnum<-gamm4(ResidCre~s(FAINu3)+AgeSexAbb3,data=SGCrCl3,random=~(1|OuID3)+(FAINu3+0|OuID3))
+summary(GAMMResCreXASxFAnum$gam)
+Family: gaussian 
+Link function: identity 
+Formula:
+ResidCre ~ s(FAINu3) + AgeClassCond3
+Parametric coefficients:  (as compared to Adult Females)
+                                  Estimate Std. Error t value Pr(>|t|)   
+(Intercept)                       -0.01808    0.02006  -0.901  0.36759   
+AgeClassCond3adult flanged male    0.06986    0.02708   2.580  0.01001 * 
+AgeClassCond3adult unflanged male  0.13650    0.05227   2.611  0.00914 **
+AgeClassCond3dependent            -0.11547    0.07812  -1.478  0.13969   
+AgeClassCond3semiIndind           -0.07047    0.03733  -1.888  0.05928 . 
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+Approximate significance of smooth terms:
+            edf Ref.df    F p-value    
+s(FAINu3) 5.094  5.094 13.6  <2e-16 ***
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+R-sq.(adj) =  0.0883   
+lmer.REML = 757.32  Scale est. = 0.10869   n = 1130
+AIC
+##provides a AICc to compare models]
+> AICc(GAMMResCreXASxFAnum$mer)
+[1] 777.5131
+
+RELEVELING THEN RUNNING GAMM AGAIN TO GET ALL AGE SEX CLASSES
+
+
+
+Baseline: Adult Flanged Male - most of this should be the same as above, just using to get new comparative age-sex classes
+Family: gaussian 
+Link function: identity 
+Formula:
+ResidCre ~ s(FAINu3) + AgeClassCond3
+Parametric coefficients:
+                                  Estimate Std. Error t value Pr(>|t|)    
+(Intercept)                        0.05178    0.01938   2.672  0.00766 ** 
+AgeClassCond3adult female         -0.06986    0.02708  -2.580  0.01001 *  
+AgeClassCond3semiIndind           -0.14033    0.03945  -3.557  0.00039 ***
+AgeClassCond3adult unflanged male  0.06665    0.05094   1.308  0.19098    
+AgeClassCond3dependent            -0.18531    0.07818  -2.370  0.01794 *  
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+Approximate significance of smooth terms:
+            edf Ref.df    F  p-value    
+s(FAINu3) 5.092  5.092 13.6 6.63e-13 ***
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 
+R-sq.(adj) =  0.0883   
+lmer.REML = 757.32  Scale est. = 0.10869   n = 1130
+
+
+
+```
+
+&nbsp;
+
+
+
+
+### Additional Supplementary Information
+
+#### Determine What Link Function is Best for GAMMs for Each Biomarker
+
+&nbsp;
+
+For each of the 4 distributions (norm, lnorm, gamma, exp), four plots are produced along with parameter estimates, log likelihood, AIC, and BIC. The four plots are:
+
+ * a histogram of data (empirical) against fitted density function
+ * Q-Q Plot: theoretical quantiles against empirical quantiles
+ * empirical cumulative distribution against fitted distribution function
+ * P-P plot :theoretical probabilities against empirical probabilities
+
+See the following text from the vignette for the fitdistrplus package
+Found at: https://cran.r-project.org/web/packages/fitdistrplus/vignettes/FAQ.html
+
+*Goodness-of-fit tests often appear as objective tools to decide whether a fitted distribution well describes a data set. But they are not ! It would not be reasonable at all to reject a distribution just because a goodness-of-fit test rejects it (see FAQ 2.2.1). And it would not be reasonable at all any more to validate a distribution because goodness-of-fit tests do not reject it (see FAQ 2.2.2).*
+
+*A fitted distribution should be evaluated using graphical methods (goodness-of-fit graphs automatically provided in our package by plotting the result of the fit (output of fitdist() or fitdistcens() and the complementary graphs that help to compare different fits - see ?graphcomp). We really think it is the most appropriate way to evaluate the adequacy of a fit and we are not the only ones to recommend it. You can find the same type of recommendations in reference books:*
+
+  * Probabilistic techniques in exposure assessment - a handbook dealing with variability and uncertainty in models and inputs by A.C. Cullen and H.C. Frey.
+  * Application of uncertainty analysis to ecological risks of pesticides by W.J. Warren-Hicks and A. Hart.
+  * Statistical inference by G. Casella and R.L. Berger
+  * Loss models: from data to decision by S.A. Klugman and H.H. Panjer and G.E. Willmot
+
+&nbsp;
+
+##### __8-OHdG__
+##### *Standard Inclusion Criteria*
+
+Note: log-normal fits best but there are two substantial outliers. Plots excluded.
+
+```{r check ohdg standard inclusion criteria for gamm modelling, include=FALSE}
+
+
+urine_value <- as.numeric(na.omit(urine_df$ohdg_include))
+
+ohdg_norm = fitdist(urine_value, distr = "norm", method = "mle")
+summary(ohdg_norm)
+plot(ohdg_norm)
+
+
+ohdg_lnorm = fitdist(urine_value, distr = "lnorm", method = "mle") 
+summary(ohdg_lnorm)
+plot(ohdg_lnorm)
+
+ohdg_gamma = fitdist(urine_value, distr = "gamma", method = "mme") 
+summary(ohdg_gamma)
+plot(ohdg_gamma)
+
+
+ohdg_exp = fitdist(urine_value, distr = "exp", method = "mme")
+summary(ohdg_exp)
+plot(ohdg_exp)
+
+```
+ 
+
+&nbsp;
+
+##### *Z-Score Outliers Removed*
+
+Note: Based on graphs, log-normal fits best, with gamma a close second. Looking at AIC and BIC, it would seem the Gamma distribution is best. I'm not yet sure which I want to go with. log-normal's P-P plot and Empirical/Theoretical CDFs are a tighter fit to the line their respective curves. Given what the authors say about using graphics, I am leaning choosing log-normal.
+
+```{r check ohdg with z outliers removed for gamm link function}
+
+urine_value <- as.numeric(na.omit(urine_df$ohdg_include[urine_df$ohdg_out_z=="not_outlier"]))
+
+#ohdg_norm_z = fitdist(urine_value, distr = "norm", method = "mle")
+#summary(ohdg_norm_z)
+#plot(ohdg_norm_z)
+
+
+ohdg_lnorm_z = fitdist(urine_value, distr = "lnorm", method = "mle") 
+summary(ohdg_lnorm_z)
+plot(ohdg_lnorm_z)
+
+ohdg_gamma_z = fitdist(urine_value, distr = "gamma", method = "mme") 
+summary(ohdg_gamma_z)
+plot(ohdg_gamma_z)
+
+
+#ohdg_exp_z = fitdist(urine_value, distr = "exp", method = "mme")
+#summary(ohdg_exp_z)
+#lot(ohdg_exp_z)
+
+```
+ 
+
+&nbsp;
+
+
+##### __TAC__
+##### *Standard Inclusion Criteria*
+
+Note: it looks like gamma fits best, with log-normal a close second. Plots excluded.
+
+```{r check tac standard inclusion for gamm link function, include=FALSE}
+
+urine_value <- as.numeric(na.omit(urine_df$tac_include))
+
+tac_norm = fitdist(urine_value, distr = "norm", method = "mle")
+summary(tac_norm)
+plot(tac_norm)
+
+
+tac_lnorm = fitdist(urine_value, distr = "lnorm", method = "mle")
+summary(tac_lnorm)
+plot(tac_lnorm)
+
+tac_gamma = fitdist(urine_value, distr = "gamma", method = "mme") 
+summary(tac_gamma)
+plot(tac_gamma)
+
+
+tac_exp = fitdist(urine_value, distr = "exp", method = "mme")
+summary(tac_exp)
+plot(tac_exp)
+
+```
+ 
+
+&nbsp;
+
+##### *Z-Score Outliers Removed*
+
+Note: Gamma is an excellent fit
+
+```{r check tac with z outliers removed for gamm link function}
+
+urine_value <- as.numeric(na.omit(urine_df$tac_include[urine_df$tac_out_z=="not_outlier"]))
+
+#tac_norm_z = fitdist(urine_value, distr = "norm", method = "mle")
+#summary(tac_norm_z)
+#plot(tac_norm_z)
+
+
+tac_lnorm_z = fitdist(urine_value, distr = "lnorm", method = "mle")
+summary(tac_lnorm_z)
+plot(tac_lnorm_z)
+
+tac_gamma_z = fitdist(urine_value, distr = "gamma", method = "mme") # best for TAC with z removed
+summary(tac_gamma_z)
+plot(tac_gamma_z)
+
+
+#tac_exp_z = fitdist(urine_value, distr = "exp", method = "mme")
+#summary(tac_exp_z)
+#+plot(tac_exp_z)
+
+```
+ 
+
+&nbsp;
+
+
+
+##### __Neopterin__
+##### *Standard Inclusion Criteria*
+
+Note: log-normal fits best, although there is at least one substantial outlier, with the potential for a few other smaller outliers. Plots excluded.
+
+```{r check neopterin with standard inclusion criteria for gamm link function, include=FALSE}
+
+### Check Neopterin Distribution for GAMM Modelling ###
+
+urine_value <- as.numeric(na.omit(urine_df$neop_include))
+
+neop_norm = fitdist(urine_value, distr = "norm", method = "mle")
+summary(neop_norm)
+plot(neop_norm)
+
+
+neop_lnorm = fitdist(urine_value, distr = "lnorm", method = "mle") 
+summary(neop_lnorm)
+plot(neop_lnorm)
+
+neop_gamma = fitdist(urine_value, distr = "gamma", method = "mme") 
+summary(neop_gamma)
+plot(neop_gamma)
+
+
+neop_exp = fitdist(urine_value, distr = "exp", method = "mme")
+summary(neop_exp)
+plot(neop_exp)
+
+
+```
+
+
+&nbsp;
+
+##### *Z-Score Outliers Removed*
+
+Note: Gamma is best; log-normal is __not__ great
+
+```{r check neopterin with z outliers removed for gamm link function}
+
+
+urine_value <- as.numeric(na.omit(urine_df$neop_include[urine_df$neop_out_z=="not_outlier"]))
+
+#neop_norm_z = fitdist(urine_value, distr = "norm", method = "mle")
+#summary(neop_norm_z)
+#plot(neop_norm_z)
+
+
+neop_lnorm_z = fitdist(urine_value, distr = "lnorm", method = "mle") 
+summary(neop_lnorm_z)
+plot(neop_lnorm_z)
+
+neop_gamma_z = fitdist(urine_value, distr = "gamma", method = "mme") 
+summary(neop_gamma_z)
+plot(neop_gamma_z)
+
+
+#neop_exp_z = fitdist(urine_value, distr = "exp", method = "mme")
+#summary(neop_exp_z)
+#plot(neop_exp_z)
+
+```
+
+
+&nbsp;
+
+
+
+##### __Cortisol__
+##### *Standard Inclusion Criteria*
+
+Note: log-normal fits best but there are a few outliers, one of which is quite extreme. Plots excluded.
+
+```{r check cortisol wtih standard inclusion criteria for gamm link function, include=FALSE}
+
+
+urine_value <- as.numeric(na.omit(urine_df$cort_include))
+
+cort_norm = fitdist(urine_value, distr = "norm", method = "mle")
+summary(cort_norm)
+plot(cort_norm)
+
+
+cort_lnorm = fitdist(urine_value, distr = "lnorm", method = "mle") # lnorm fits best
+summary(cort_lnorm)
+plot(cort_lnorm)
+
+cort_gamma = fitdist(urine_value, distr = "gamma", method = "mme") 
+summary(cort_gamma)
+plot(cort_gamma)
+
+
+cort_exp = fitdist(urine_value, distr = "exp", method = "mme")
+summary(cort_exp)
+plot(cort_exp)
+
+
+```
+
+
+&nbsp;
+
+##### *Z-Score Outliers Removed*
+
+Note: Gamma fits best, although I would like to consider removing between 1 and 5 outliers to improve the Q-Q plot fit.
+
+```{r check cortisol with z outliers removed for gamm link function}
+
+urine_value <- as.numeric(na.omit(urine_df$cort_include[urine_df$cort_out_z=="not_outlier"]))
+
+#cort_norm_z = fitdist(urine_value, distr = "norm", method = "mle")
+#summary(cort_norm_z)
+#plot(cort_norm_z)
+
+
+cort_lnorm_z = fitdist(urine_value, distr = "lnorm", method = "mle") 
+summary(cort_lnorm_z)
+plot(cort_lnorm_z)
+
+cort_gamma_z = fitdist(urine_value, distr = "gamma", method = "mme") 
+summary(cort_gamma_z)
+plot(cort_gamma_z)
+
+
+#cort_exp_z = fitdist(urine_value, distr = "exp", method = "mme")
+#summary(cort_exp_z)
+#plot(cort_exp_z)
+
+```
+
+
+&nbsp;
+
+
+##### *Z-Score Outliers and 1 Remaining Point Removed*
+
+Note: So the largest outlier was a cortisol value of at least 300,000. I removed it and the gamma plot came out best (see below). When I removed the next largest outlier (cortisol < 250,000), all plots looked great, so I will further filter cortisol to all values below 250,000. AIC and BIC values also dropped substantially.
+
+```{r check cortisol with z outliers and one additional point removed for gamm link function}
+
+urine_value <- as.numeric(na.omit(urine_df$cort_include[urine_df$cort_out_z=="not_outlier"]))
+
+# remove the one large point using urine_value[urine_value < 300000]
+
+
+cort_gamma_z = fitdist(urine_value[urine_value < 300000], distr = "gamma", method = "mme") 
+summary(cort_gamma_z)
+plot(cort_gamma_z)
+
+
+cort_gamma_z = fitdist(urine_value[urine_value < 250000], distr = "gamma", method = "mme") 
+summary(cort_gamma_z)
+plot(cort_gamma_z)
+
+```
+
+
+
+
+
+##### __ELBM__
+##### *Standard Inclusion Criteria*
+
+Note: Values must be positive to fit the lnorm, gamma, or exp distributions. Plots excluded.
+
+```{r check elbm wtih standard inclusion criteria for gamm link function, echo=FALSE}
+
+
+urine_value <- as.numeric(na.omit(urine_df$elbm_include))
+
+elbm_norm = fitdist(urine_value, distr = "norm", method = "mle")
+summary(elbm_norm)
+plot(elbm_norm)
+
+
+#elbm_lnorm = fitdist(urine_value, distr = "lnorm", method = "mle") 
+#summary(elbm_lnorm)
+#plot(elbm_lnorm)
+
+#elbm_gamma = fitdist(urine_value, distr = "gamma", method = "mme") 
+#summary(elbm_gamma)
+#plot(elbm_gamma)
+
+
+#elbm_exp = fitdist(urine_value, distr = "exp", method = "mme")
+#summary(elbm_exp)
+#plot(elbm_exp)
+
+
+```
+
+
+&nbsp;
+
+##### *Z-Score Outliers Removed*
+
+Note: When looking at the distribution without outliers, the normal distribution seems to fit decently well and is much improved compared to the normal distribution with the outliers kept in. I will fit with the normal distribution.
+
+```{r check elbm with z outliers removed for gamm link function}
+
+urine_value <- as.numeric(na.omit(urine_df$elbm_include[urine_df$elbm_out_z=="not_outlier"]))
+
+elbm_norm_z = fitdist(urine_value, distr = "norm", method = "mle")
+summary(elbm_norm_z)
+plot(elbm_norm_z)
+
+
+#elbm_lnorm_z = fitdist(urine_value, distr = "lnorm", method = "mle") 
+#summary(elbm_lnorm_z)
+#plot(elbm_lnorm_z)
+
+#elbm_gamma_z = fitdist(urine_value, distr = "gamma", method = "mme") 
+#summary(elbm_gamma_z)
+#plot(elbm_gamma_z)
+
+
+#elbm_exp_z = fitdist(urine_value, distr = "exp", method = "mme")
+#summary(elbm_exp_z)
+#plot(elbm_exp_z)
+
+```
+
+
+&nbsp;
+
+
+
+#### Box Plots of biomarkers by full age sex classes
+
+&nbsp;
+
+```{r supplement ohdg by age sex class}
+
+# standard inclusion criteria
+
+ggplot(urine_df %>% drop_na(ohdg_include), aes(x = Age_Class, y = ohdg_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "8-OHdG",
+       title = "8-OHdG with Standard Inclusion Criteria",
+       caption = "I cannot really identify a pattern aside from the \n chance for a lot of higher outliers in adult females")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# removed 8-OHdG with distances > 20
+
+ggplot(urine_df %>% filter(ohdg_dist <= 20), aes(x = Age_Class, y = ohdg_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "8-OHdG",
+       title = "8-OHdG Distance Outliers Removed")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# removed 8-OHdG outside -3 to 3 Z scores
+
+ggplot(urine_df %>% filter(ohdg_out_z == "not_outlier"), aes(x = Age_Class, y = ohdg_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "8-OHdG",
+       title = "8-OHdG Z-Score Outliers Removed")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+```
+
+&nbsp;
+
+
+```{r supplement tac by age sex class}
+
+
+# standard inclusion criteria
+
+ggplot(urine_df %>% drop_na(tac_include), 
+       aes(x = Age_Class, y = tac_include, na.rm = TRUE)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "TAC",
+       title = "TAC with Standard Inclusion Criteria")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# removed TAC with distance > 1.5
+
+ggplot(urine_df %>% filter(tac_dist <= 1.5), 
+       aes(x = Age_Class, y = tac_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "TAC",
+       title = "TAC Distance Outliers Removed")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+# removed TAC outside the -3 to 3 Z-score range
+
+ggplot(urine_df %>% filter(tac_out_z == "not_outlier"), 
+       aes(x = Age_Class, y = tac_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "TAC",
+       title = "TAC Z-Score Outliers Removed")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+```
+
+&nbsp;
+
+  
+```{r supplement neopterin by age sex class}
+
+
+# standard inclusion criteria
+
+ggplot(urine_df %>% drop_na(neop_include), 
+       aes(x = Age_Class, y = neop_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Neopterin",
+       title = "Neopterin with Standard Inclusion Criteria")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# single large outlier removed
+
+ggplot(urine_df %>% filter(neop_include < 7500), 
+       aes(x = Age_Class, y = neop_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Neopterin (< 7500)",
+       title = "Neopterin with Single High Outlier Removed",
+       caption = "It does appear that adult flanged males higher \n median levels of neopterin")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# removed Neopterin with distance < 500
+
+ggplot(urine_df %>% filter(neop_dist <= 500), 
+       aes(x = Age_Class, y = neop_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Neopterin",
+       title = "Neopterin Distance Outliers Removed")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# removed Neopterin outside Z score range
+
+ggplot(urine_df %>% filter(neop_out_z == "not_outlier"), 
+       aes(x = Age_Class, y = neop_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Neopterin",
+       title = "Neopterin Z-Score Outliers Removed")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+```
+
+&nbsp;
+
+
+```{r supplement cortisol by age sex class}
+
+# standard inclusion criteria
+
+ggplot(urine_df %>% drop_na(cort_include), 
+       aes(x = Age_Class, y = cort_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Cortisol",
+       title = "Cortisol with Standard Inclusion Criteria")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# one big outlier removed
+
+ggplot(urine_df %>% filter(cort_include < 750000), 
+       aes(x = Age_Class, y = cort_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Cortisol (<750k)",
+       title = "Cortisol (one big outlier removed)",
+       caption = "Flanged Males appear to have higher levels of cortisol")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# distance outliers removed
+
+ggplot(urine_df %>% filter(cort_dist <= 20000), 
+       aes(x = Age_Class, y = cort_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Cortisol",
+       title = "Cortisol with Distance outliers Removed")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# z score outliers removed
+
+ggplot(urine_df %>% filter(cort_out_z == "not_outlier"), 
+       aes(x = Age_Class, y = cort_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Cortisol",
+       title = "Cortisol with Z-score outlier removed")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+
+
+```
+
+&nbsp;
+
+
+```{r supplement elbm by age sex class}
+
+# standard Inclusion Criteria
+
+ggplot(urine_df %>% drop_na(elbm_include), 
+       aes(x = Age_Class, y = elbm_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "ELBM",
+       title = "ELBM Standard Inclusion Criteria")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# z score outliers removed
+
+ggplot(urine_df %>% filter(elbm_out_z == "not_outlier"), 
+       aes(x = Age_Class, y = elbm_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "ELBM",
+       title = "ELBM Z-Score Outlier removed")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+```
+
+&nbsp;
+
+#### Work on Distance Outlier Detection
+
+&nbsp;
+
+
+```{r plot distribution of distances for each biomarker}
+
+
+grid.arrange(
+  ggplot(urine_df, aes(x = ohdg_dist)) +
+  geom_histogram() +
+  ylim(0, 20) +
+  labs(title = "Distribution of Successive \n 8-OHdG Distances",
+       subtitle = "y-axis limited to 20",
+       x = "Distance of 8-OHdG Points",
+       y = "Count") +
+  theme_bw(),
+  ggplot(urine_df, aes(x = tac_dist)) +
+  geom_histogram() +
+  ylim(0, 20) +
+  labs(title = "Distribution of Successive \n TAC Distances",
+       subtitle = "y-axis limited to 20",
+       x = "Distance of TAC Points",
+       y = "Count") +
+  theme_bw(),
+  ggplot(urine_df, aes(x = neop_dist)) +
+  geom_histogram() +
+  ylim(0, 20) +
+  labs(title = "Distribution of Successive \n Neopterin Distances",
+       subtitle = "y-axis limited to 20",
+       x = "Distance of Neopterin Points",
+       y = "Count") +
+  theme_bw(),
+  ggplot(urine_df, aes(x = cort_dist/1000)) +
+  geom_histogram() +
+  ylim(0, 20) +
+  labs(title = "Distribution of Successive \n Cortisol Distances",
+       subtitle = "y-axis limited to 20",
+       x = "Distance of Cortisol Points Divided by 1000",
+       y = "Count") +
+  theme_bw(),
+  ncol = 2
+)
+
+
+
+```
+
+
+Based on these plots, I am going to flag the distance outliers as follows:
+   * 8-OHdG: distances greater than 20
+   * TAC: distances greater than 1.5
+   * Neopterin: Distances greater than 500
+   * Cortisol: distance greater than 80,000 (800 on the plot)
+
+*Note: I went with the distance metric and that resulted in some of the distributions in the supplement of this document where I tried to determine the best link function for later GAMM fittings. There still appears to be some outliers, so perhaps I need to use the Z-score or 1.5 x IQR approach*
+
+
+```{r biomarkers by truncated age class with distance outliers removed}
+
+# 8-OHdG
+
+ggplot(urine_df %>% filter(ohdg_dist <= 20), 
+       aes(x = Age_Cat_trunc, y = ohdg_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "8-OHdG",
+       title = "8-OHdG Distance Outliers Removed",
+       subtitle = "Truncated Age-Sec Classes")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# distance outliers removed
+
+ggplot(urine_df %>% filter(tac_dist <= 1.5), 
+         aes(x = Age_Cat_trunc, y = tac_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "TAC",
+       title = "TAC Distance Outliers Removed")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# distance outliers removed
+
+ggplot(urine_df %>% filter(neop_dist <= 500), 
+         aes(x = Age_Cat_trunc, y = neop_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Neopterin",
+       title = "Neopterin Distance Outliers Removed")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+# distance outliers removed
+
+ggplot(urine_df %>% filter(cort_dist <= 20000), 
+         aes(x = Age_Cat_trunc, y = cort_include)) +
+  geom_boxplot() +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  labs(x = "Age-Sex Class", y = "Cortisol",
+       title = "Cortisol with Distance outliers Removed")+
+  theme_bw() +
+  theme(axis.text = element_text(size = 10))
+
+
+
+```
+
+&nbsp;
+
+```{r comparisons between biomarkers with distance outliers removed, eval=FALSE, include=FALSE}
+
+urine_df %>% 
+  filter(ohdg_dist <= 20 & tac_dist <= 1.5) %>% 
+  ggplot(., aes(x = tac_include, y = ohdg_include)) +
+  geom_point() +
+  geom_smooth(method = "lm")+
+  theme_bw()
+
+
+urine_df %>% 
+  filter(ohdg_dist <= 20 & neop_dist <= 100) %>% 
+  ggplot(., aes(x = neop_include, y = ohdg_include)) +
+  geom_point() +
+  geom_smooth(method = "lm")+
+  theme_bw()
+
+
+
+urine_df %>% 
+  filter(tac_dist <= 1.5 & neop_dist <= 100) %>% 
+  ggplot(., aes(x = neop_include, y = tac_include)) +
+  geom_point() +
+  geom_smooth(method = "lm")+
+  theme_bw()
+
+
+urine_df %>% 
+  filter(ohdg_dist <= 20 & tac_dist <= 1.5 & neop_dist <= 500) %>% 
+  ggplot(., aes(x = tac_include, y = ohdg_include, size = neop_include)) +
+  geom_point() +
+  geom_smooth(method = "lm")+
+  theme_bw()
+
+
+urine_df %>% 
+  filter(ohdg_dist <= 20 & cort_dist <= 20000) %>% 
+  ggplot(., aes(x = cort_include, y = ohdg_include)) +
+  geom_point() +
+  geom_smooth(method = "lm")+
+  facet_wrap(~Age_Class)+
+  theme_bw()
+
+```
+
+&nbsp;
+
+#### Biomarkers by FAI 
+
+```{r ohdg and tac by fai}
+
+
+grid.arrange(
+  # ohdg and fai
+  ggplot(urine_df, aes(x = fai, y = ohdg_include)) +
+  geom_point() +
+  geom_smooth(method = 'gam') +
+    labs(x = "Fruit Availability Index", y = "8-OHdG") +
+    xlim(c(0, 8.5)) +
+    theme_bw() +
+    theme(axis.text = element_text(size = 10)),
+  # ohdg with two outliers removed
+  urine_df %>% 
+    filter(ohdg_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = fai, y = ohdg_include)) +
+  geom_point() +
+  geom_smooth(method = 'gam') +
+    labs(x = "Fruit Availability Index", y = "8-OHdG (No Outliers)") +
+    xlim(c(0, 8.5)) +
+    theme_bw() +
+    theme(axis.text = element_text(size = 10)),
+  ncol = 2
+)
+
+
+
+ggplot(urine_df, aes(x = fai, y = tac_include)) +
+  geom_point() +
+  geom_smooth(method = 'gam') +
+    labs(x = "Fruit Availability Index", y = "TAC") +
+    xlim(c(0, 7)) +
+    theme_bw() +
+    theme(axis.text = element_text(size = 10))
+
+
+```
+
+The increase in 8-OHdG related to FAI seems to be driven by a single point. Note that a much higher outlier exists elsewhere on the lower end of FAI so I doubt FAI is actually related to this at all. If I remove these two outliers, it would appear, ever so slightly, that there are two plateaus, where it starts out lower and then increases. However, this is not really suggestive of anything; FAI is not capturing information relevant to oxidative stress. TAC definitely does not seem to be associated with it. I mean maybe there is a bit of a bimodal peak. Maybme.
+
+&nbsp;
+
+
+```{r biomarkers by fai}
+
+
+grid.arrange(
+  # neopterin and fai
+  urine_df %>% 
+    filter(neop_out_z == "not_outlier") %>% 
+    ggplot(., aes(x = fai, y = neop_include)) +
+    geom_point() +
+    geom_smooth(method = 'gam') +
+      labs(x = "Fruit Availability Index", y = "Neopterin (No Outliers)") +
+      xlim(c(0, 8)) +
+      theme_bw() +
+      theme(axis.text = element_text(size = 10)),
+  # cortisol and fai
+  urine_df %>% 
+    filter(cort_out_z == "not_outlier") %>% 
+    ggplot(., aes(x = fai, y = cort_include)) +
+    geom_point() +
+    geom_smooth(method = 'gam') +
+      labs(x = "Fruit Availability Index", y = "Cortisol (No Outliers)") +
+      theme_bw() +
+      theme(axis.text = element_text(size = 10)),
+  # elbm and fai
+  urine_df %>% 
+  filter(elbm_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = fai, y = elbm_include)) +
+    geom_point() +
+    geom_smooth(method = 'gam') +
+    xlim(c(0, 8.5))+
+      labs(x = "Fruit Availability Index", y = "ELBM (No Outliers)") +
+      theme_bw() +
+      theme(axis.text = element_text(size = 10)),
+  ncol = 2)
+
+```
+
+Both neopterin and ELBM seem to increase with FAI up to a point and then become stable; there is a rather wide spread to the data. This increase runs from 0 to 2% FAI, where caloric intake is most likely at it's lowest and when orangutans might be undernourished. While an unsubstantiated statement, it makes sense that these relationships would be stable except in the extreme. The relationship between cortisol and FAI is almost nonsensical; further analysis has been disregarded. Conclusive statements will require modelling that accounts for individual variation. 
+
+&nbsp;
+
+
+
+#### Biomarkers by Select Forest Chemstrip Data
+
+This part of the report was inspired by a paper talking about the effects of high glucose induced increases in oxidative stress episodes on myogenesis, particularly acceleration (Liu et al. 2020).
+
+```{r chemstrip glucose and oxidative stress}
+
+grid.arrange(
+  # ohdg
+  urine_df %>% 
+  drop_na(forest_glucose) %>% 
+  filter(ohdg_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = forest_glucose, y = ohdg_include, fill = forest_glucose)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "grey", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 4) +
+  scale_fill_viridis(discrete = TRUE) +
+    labs(x = "Glucose", y = "8-OHdG") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 10)),
+  # tac
+  urine_df %>% 
+  drop_na(forest_glucose) %>% 
+    filter(tac_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = forest_glucose, y = tac_include, fill = forest_glucose)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "grey", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 4) +
+  scale_fill_viridis(discrete = TRUE) +
+    labs(x = "Glucose", y = "TAC")  +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 10)),
+  # neopterin
+  urine_df %>% 
+  drop_na(forest_glucose) %>% 
+    filter(neop_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = forest_glucose, y = neop_include, fill = forest_glucose)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "grey", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 4) +
+  scale_fill_viridis(discrete = TRUE) +
+    labs(x = "Glucose", y = "Neopterin")  +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 10)),
+  # cortisol
+  urine_df %>% 
+  drop_na(forest_glucose) %>%
+    filter(cort_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = forest_glucose, y = cort_include, fill = forest_glucose)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "grey", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 4) +
+  scale_fill_viridis(discrete = TRUE) +
+    labs(x = "Glucose", y = "8-Cortisol")  +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 10)),
+  ncol = 2,
+  top = "Biomarkers and Glucose")
+
+
+```
+
+Given the tiny sample sizes with a glucose reading above normal, I doubt these distributions have any true relevance.
+
+
+&nbsp;
+
+```{r chemstrip ketones and biomarkers}
+
+grid.arrange(
+  # ohdg
+  urine_df %>% 
+  drop_na(forest_ketones) %>% 
+  filter(ohdg_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = forest_ketones, y = ohdg_include, fill = forest_ketones)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "grey", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  scale_fill_viridis(discrete = TRUE) +
+    labs(y = "8-OHdG")+
+  theme_bw() +
+  theme(legend.position = "none", axis.title.x = element_blank()),
+  # tac
+  urine_df %>% 
+  drop_na(forest_ketones) %>% 
+  filter(tac_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = forest_ketones, y = tac_include, fill = forest_ketones)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "grey", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  scale_fill_viridis(discrete = TRUE) +
+    labs(y = "TAC")+
+  theme_bw() +
+  theme(legend.position = "none", axis.title.x = element_blank()),
+  # neopterin
+  urine_df %>% 
+  drop_na(forest_ketones) %>% 
+  filter(neop_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = forest_ketones, y = neop_include, fill = forest_ketones)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "grey", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  scale_fill_viridis(discrete = TRUE) +
+    labs(y = "Neopterin") +
+  theme_bw() +
+  theme(legend.position = "none", axis.title.x = element_blank()),
+  # cortisol
+  urine_df %>% 
+  drop_na(forest_ketones) %>% 
+  filter(cort_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = forest_ketones, y = cort_include, fill = forest_ketones)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "grey", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  scale_fill_viridis(discrete = TRUE) +
+    labs(y = "Cortisol") +
+  theme_bw() +
+  theme(legend.position = "none", axis.title.x = element_blank()),
+  ncol = 2,
+  top = "Biomarkers and Ketone Bodies",
+  bottom = "Ketone Bodies"
+)
+
+
+
+```
+
+Based solely on violin plots, it looks like high levels of ketones *might* increase oxidative stress.
+
+&nbsp;
+
+```{r test ketones and biomarkers using gamm}
+
+
+mod_ket_ohdg <- gamm(ohdg_include ~ forest_ketones, 
+                     data = urine_df, 
+                     family = gaussian(link = "log"),
+                     random = list(Orangutan_ID=~1))
+
+mod_ket_tac <- gamm(tac_include ~ forest_ketones, 
+                    data = urine_df, 
+                    family = Gamma,
+                    random = list(Orangutan_ID=~1))
+
+mod_ket_neop <- gamm(tac_include ~ forest_ketones,
+                     data = urine_df, 
+                     family = gaussian(link = "log"),
+                     random = list(Orangutan_ID=~1))
+
+mod_ket_cort <- gamm(cort_include ~ forest_ketones, 
+                     data = urine_df %>% filter(cort_include < 250000), 
+                     family = Gamma,
+                     random = list(Orangutan_ID=~1))
+
+
+summary(mod_ket_ohdg$gam)
+summary(mod_ket_tac$gam)
+summary(mod_ket_neop$gam)
+summary(mod_ket_cort$gam)
+
+
+```
+
+
+There is not a lot of data here so it is difficult to say a lot. GAMMs indicate a few things. For 8-OHdG, looks like moderate ketones are significantly larger than negative-small or large. No significant differences for TAC or neopterin. For cortisol, nothing is significant but both moderate and large are approaching significance. I would bet if I adjusted p-values across these models, these signifcances would drop out except maybe 8-OHdG. However, there are so few samples in the non-negative categories in that model that I don't feel confident saying much.
+
+
+
+&nbsp;
+
+
+```{r leukocytes and biomarkers}
+
+
+grid.arrange(
+  # ohdg
+  urine_df %>% 
+  drop_na(forest_leukocytes) %>% 
+  filter(ohdg_out_z == "not_outlier") %>% 
+  ggplot(., aes(x =forest_leukocytes, y = ohdg_include, 
+                fill = forest_leukocytes)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "grey", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  scale_fill_viridis(discrete = TRUE) +
+    labs(y = "8-OHdG")+
+  theme_bw() +
+  theme(legend.position = "none", axis.title.x = element_blank()),
+  # tac
+  urine_df %>% 
+  drop_na(forest_leukocytes) %>% 
+  filter(tac_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = forest_leukocytes, y = tac_include, 
+                fill = forest_leukocytes)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "grey", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  scale_fill_viridis(discrete = TRUE) +
+    labs(y = "TAC")+
+  theme_bw() +
+  theme(legend.position = "none", axis.title.x = element_blank()),
+  # neopterin
+  urine_df %>% 
+  drop_na(forest_leukocytes) %>% 
+  filter(neop_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = forest_leukocytes, y = neop_include, 
+                fill = forest_leukocytes)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "grey", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  scale_fill_viridis(discrete = TRUE) +
+    labs(y = "Neopterin") +
+  theme_bw() +
+  theme(legend.position = "none", axis.title.x = element_blank()),
+  # cortisol
+  urine_df %>% 
+  drop_na(forest_leukocytes) %>% 
+  filter(cort_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = forest_leukocytes, y = cort_include, 
+                fill = forest_leukocytes)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "grey", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  scale_fill_viridis(discrete = TRUE) +
+    labs(y = "Cortisol") +
+  theme_bw() +
+  theme(legend.position = "none", axis.title.x = element_blank()),
+  ncol = 2,
+  top = "Biomarkers and Leukocytes",
+  bottom = "Leukocytes"
+)
+
+
+```
+
+I'm not particularly seeing a relationship here. There looks like a steady positive increase in TAC might occur due to circulating leukocytes. The highest category always seems to be higher, but it has a full order of magnitude smaller a sample size so extreme caution should be taken in drawing any conclusions. The GAMM suggests thi strend is indeed true. Extremely low R squared adjusted though, and estimates are quite small. 
+
+```{r test tac against leukocytes}
+
+mod_leuk_tac <- gamm(tac_include ~ forest_leukocytes, 
+                    data = urine_df, 
+                    family = Gamma,
+                    random = list(Orangutan_ID=~1))
+
+summary(mod_leuk_tac$gam)
+
+```
+
+
+
+&nbsp;
+
+```{r elbm and chemstrip violin plots}
+
+
+grid.arrange(
+  # ELBM by ketones
+  urine_df %>% 
+  drop_na(forest_ketones) %>% 
+  filter(elbm_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = forest_ketones, y = elbm_include, fill = forest_ketones)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "grey", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) + 
+  scale_fill_viridis(discrete = TRUE) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+  labs(x = "Ketone Bodies", y = "ELBM") +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text = element_text(size = 12),
+        axis.title.y = element_blank()),
+  # ELBM by glucose
+  urine_df %>% 
+  drop_na(forest_glucose) %>% 
+  filter(elbm_out_z == "not_outlier")  %>% 
+  ggplot(., aes(x = forest_glucose, y = elbm_include, fill = forest_glucose)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "black", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  scale_fill_viridis(discrete = TRUE) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+    labs(x = "Glucose") +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text = element_text(size = 12),
+        axis.title.y = element_blank()),
+  # ELBM by leukocytes
+  urine_df %>% 
+  drop_na(forest_leukocytes) %>% 
+  filter(elbm_out_z == "not_outlier") %>% 
+  ggplot(., aes(x = forest_leukocytes, y = elbm_include, 
+                fill = forest_leukocytes)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, color = "black", alpha = 0.2) +
+  stat_summary(fun.data = give.n, geom = "text", color = "black", size = 5) +
+  scale_fill_viridis(discrete = TRUE) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+    labs(x = "Leukocytes") +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text = element_text(size = 12),
+        axis.title.y = element_blank()),
+  ncol = 2,
+  top = "ELBM by Chemstrips"
+)
+
+
+```
+
+Very few samples are under the moderate and large categories of ketone bodies. It would appear that some degree of increase is found in the large category. I can't really say anything about glucose. Seeing as all categories fall within the same rough range, particularly of the negative category. If these data are accurate, I'd say there really isn't an effect. Likely the strips are simply not effective at measuring glucose. When it comes to white blood cells, there is some evidence of an increase in lean body mass. This begs the question of what the relationship between neopterin will be.
+
+&nbsp;
+
+
+#### How many samples were collected by each field worker?
+
+This first table will include all assayed samples, broken down by type of assay. All samples are included regardless of CV, whether it was a first morning void, whether it is too dilute, or taking any other considerations.
+
+```{r supplement table of samples collected by field worker}
+
+
+urine_df %>% 
+  dplyr::select(Who_collected_clean, ohdg, tac, neopterin, cortisol, gcsf, il10, il1ra, il8, mcp1, tnfa) %>% 
+  pivot_longer(cols = ohdg:tnfa, names_to = "biomarker", values_to = "concentration") %>% 
+  # recode biomarker names
+  mutate(biomarker = recode(biomarker, "ohdg" = "8-OHdG", "tac" = "Total Antioxidant Capacity",
+         "neopterin" = "Neopterin", "cortisol" = "Cortisol", "gcsf" = "G-CSF",
+         "il10" = "IL-10", "il1ra" = "IL-1Ra", "il8" = "IL-8/CXCL-8", "mcp1" = "MCP-1", "tnfa" = "TNF_a")) %>% 
+  group_by(biomarker, Who_collected_clean) %>% 
+  summarise(num_collected = sum(!is.na(concentration))) %>%
+  mutate(prop_collected = round((num_collected / sum(num_collected)) * 100, digits = 2)) %>% 
+  filter(num_collected > 0)  %>% 
+  kbl(caption = "Table 1b: All assayed samples by which field worker collected them") %>% 
+  kable_classic() %>% 
+  collapse_rows(columns = 1)
+
+
+
+```
+
+&nbsp;
